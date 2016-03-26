@@ -29,6 +29,7 @@ const ins = {
 
 
 class Iso7816Application {
+    
     constructor(devices, cardReader) {
         this.devices = devices;
         this.cardReader = cardReader;
@@ -37,7 +38,7 @@ class Iso7816Application {
     issueCommand(commandApdu) {
         //console.log(`Iso7816Application.issueCommand '${commandApdu}' `);
         return this.devices
-            .issueCommand(this.cardReader, commandApdu.toBuffer())
+            .issueCommand(this.cardReader, commandApdu)
             .then(resp => {
                 var response = new ResponseApdu(resp);
                 //console.log(`status code '${response.statusCode()}'`);
