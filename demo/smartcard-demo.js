@@ -29,8 +29,8 @@ devices.on('device-activated', function (event) {
             .then(function (response) {
                 console.log(`Response '${response.toString('hex')}`);
             }).catch(function (error) {
-            console.error(error);
-        });
+                console.error(error);
+            });
     });
     device.on('card-removed', function (event) {
         console.log(`Card removed from '${event.name}' `);

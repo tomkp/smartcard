@@ -150,7 +150,7 @@ class Card extends EventEmitter {
                 this.emit('response-received', {
                     card: this,
                     command: commandBuffer,
-                    response: new Buffer(response.toString('hex'))
+                    response: new ResponseApdu(response)
                 });
                 callback(err, response);
             });
@@ -162,7 +162,7 @@ class Card extends EventEmitter {
                         this.emit('response-received', {
                             card: this,
                             command: commandBuffer,
-                            response: new Buffer(response.toString('hex'))
+                            response: new ResponseApdu(response)
                         });
                         resolve(response);
                     }
@@ -335,7 +335,7 @@ ResponseApdu.prototype.correctLength = function() {
     return parseInt(hexLength, 16);
 };
 ResponseApdu.prototype.toString = function() {
-    return this.data;
+    return this.data.toString('hex');
 };
 
 
