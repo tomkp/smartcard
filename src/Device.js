@@ -9,7 +9,7 @@ class Device extends EventEmitter {
         super();
         //console.log(`new Device(${reader})`);
         this.reader = reader;
-        //this.
+        this.card = null;
 
         const isCardInserted = (changes, reader, status) => {
             return (changes & reader.SCARD_STATE_PRESENT) && (status.state & reader.SCARD_STATE_PRESENT);
@@ -24,12 +24,8 @@ class Device extends EventEmitter {
                 if (err) {
                     this.emit('error', err);
                 } else {
-                    //devices[reader.name] = { reader, protocol};
-                    this.emit('debug', `Device '${reader.name}' has protocol '${protocol}'`);
-                    //events.emit('card-inserted', {reader, status, protocol});
-                    var card = new Card(this, reader, status, protocol);
-
-                    this.emit('card-inserted', {device: this, card});
+                    this.card = new Card(this, reader, status, protocol);
+                    this.emit('card-inserted', {device: this, card: this.card});
                 }
             });
         };
@@ -41,8 +37,8 @@ class Device extends EventEmitter {
                 if (err) {
                     this.emit('error', err);
                 } else {
-                    //devices[reader.name] = {};
                     this.emit('card-removed', {name});
+                    this.card = null;
                 }
             });
         };
@@ -64,7 +60,7 @@ class Device extends EventEmitter {
     }
 
     toString() {
-        return `Device(name:'${this.reader.name}')`;
+        return `Device(name:'${this.reader.name}'`;
     }
 }
 
