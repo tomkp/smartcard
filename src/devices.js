@@ -17,9 +17,9 @@ class Devices extends EventEmitter {
         this.pcsc.on('reader', (reader) => {
             const device = new Device(reader);
             this.devices[reader.name] = {};
-            this.emit('device-activated', {device, devices: this.devices});
+            this.emit('device-activated', {device, devices: this.listDevices()});
             reader.on('end', () => {
-                //delete devices[reader.name];
+                delete this.devices[reader.name];
                 this.emit('device-deactivated', {reader});
             });
             reader.on('error', (error) => {
@@ -48,6 +48,7 @@ class Device extends EventEmitter {
         super();
         //console.log(`new Device(${reader})`);
         this.reader = reader;
+        //this.
 
         const isCardInserted = (changes, reader, status) => {
             return (changes & reader.SCARD_STATE_PRESENT) && (status.state & reader.SCARD_STATE_PRESENT);
@@ -74,12 +75,13 @@ class Device extends EventEmitter {
 
 
         const cardRemoved = (reader) => {
+            const name = reader.name;
             reader.disconnect(reader.SCARD_LEAVE_CARD, (err) => {
                 if (err) {
                     this.emit('error', err);
                 } else {
                     //devices[reader.name] = {};
-                    this.emit('card-removed', {reader});
+                    this.emit('card-removed', {name});
                 }
             });
 

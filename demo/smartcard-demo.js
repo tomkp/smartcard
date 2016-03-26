@@ -17,9 +17,13 @@ devices.on('device-activated', function (event) {
 
     });
     device.on('card-removed', function (event) {
-        console.log(`Card removed from '${event.device}' `);
+        console.log(`Card removed from '${event.name}' `);
     });
 
+});
+
+devices.on('device-deactivated', function (event) {
+    console.log(`Device '${event.reader.name}' deactivated, devices: ${devices.listDevices()}`);
 });
 
 
