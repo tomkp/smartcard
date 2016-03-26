@@ -1,7 +1,8 @@
 'use strict';
 
-const Devices = require('../lib/Devices');
-const Iso7816Application = require('../lib/Iso7816Application');
+const api = require('../lib/index');
+const Devices = api.Devices;
+const Iso7816Application = api.Iso7816Application;
 
 const devices = new Devices();
 
@@ -26,14 +27,14 @@ devices.on('device-activated', function (event) {
             console.log(`Response '${event.response}' received from '${event.card}' in response to '${event.command}'`);
         });
 
-        /*card
+        card
             .issueCommand('00A404000E315041592E5359532E4444463031')
             .then(function (response) {
                 console.log(`Response '${response.toString('hex')}`);
             }).catch(function (error) {
                 console.error(error);
             });
-*/
+
         const application = new Iso7816Application(card);
         application.selectFile([0x31, 0x50, 0x41, 0x59, 0x2E, 0x53, 0x59, 0x53, 0x2E, 0x44, 0x44, 0x46, 0x30, 0x31])
             .then(function (response) {

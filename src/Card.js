@@ -26,24 +26,25 @@ class Card extends EventEmitter {
 
     issueCommand(commandApdu, callback) {
 
-/*
-        let commandBuffer;
-        if (Array.isArray(command)) {
-            commandBuffer = new Buffer(command);
-        } else if (typeof command === 'string') {
-            commandBuffer = new Buffer(hexify.toByteArray(command));
-        } else if (Buffer.isBuffer(command)) {
-            commandBuffer = command;
+        let buffer;
+        if (Array.isArray(commandApdu)) {
+            buffer = new Buffer(commandApdu);
+        } else if (typeof commandApdu === 'string') {
+            buffer = new Buffer(hexify.toByteArray(commandApdu));
+        } else if (Buffer.isBuffer(commandApdu)) {
+            buffer = commandApdu;
+        } else if (typeof commandApdu === 'string') {
+            buffer = new Buffer(hexify.toByteArray(commandApdu));
         } else {
-            throw 'Unable to recognise command type (' + typeof command + ')';
+            buffer = commandApdu.toBuffer();
         }
-*/
 
         const protocol = this.protocol;
 
         this.emit('command-issued', {card: this, command: commandApdu});
         if (callback) {
-            this.reader.transmit(commandApdu.toBuffer(), 0xFF, protocol, (err, response) => {
+
+            this.reader.transmit(buffer, 0xFF, protocol, (err, response) => {
                 this.emit('response-received', {
                     card: this,
                     command: commandApdu,
@@ -53,7 +54,7 @@ class Card extends EventEmitter {
             });
         } else {
             return new Promise((resolve, reject) => {
-                this.reader.transmit(commandApdu.toBuffer(), 0xFF, protocol, (err, response) => {
+                this.reader.transmit(buffer, 0xFF, protocol, (err, response) => {
                     if (err) reject(err);
                     else {
                         this.emit('response-received', {
