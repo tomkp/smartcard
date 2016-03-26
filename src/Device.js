@@ -59,7 +59,7 @@ class Device extends EventEmitter {
     }
 
     toString() {
-        return `Device(name:'${this.reader.name}')`;
+        return `${this.reader.name}`;
     }
 }
 
