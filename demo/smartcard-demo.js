@@ -1,8 +1,9 @@
 'use strict';
 
-const Devices = require('../lib/Smartcard');
+const Smartcard = require('../lib/Smartcard');
 
-const devices = new Devices();
+const devices = new Smartcard();
+
 
 devices.on('device-activated', function (event) {
     const currentDevices = event.devices;
@@ -31,6 +32,10 @@ devices.on('device-activated', function (event) {
             }).catch(function (error) {
                 console.error(error);
             });
+
+        
+        //const application = new Iso7816Application(card);
+
     });
     device.on('card-removed', function (event) {
         console.log(`Card removed from '${event.name}' `);

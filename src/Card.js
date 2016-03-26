@@ -2,9 +2,7 @@
 
 import {EventEmitter} from 'events';
 import hexify from 'hexify';
-import CommandApdu from './CommandApdu';
 import ResponseApdu from './ResponseApdu';
-import Device from './Device';
 
 
 class Card extends EventEmitter {

@@ -28,17 +28,17 @@ const ins = {
 };
 
 
-class Iso7816Application {
+class Iso7816Application extends EventEmitter {
     
-    constructor(devices, cardReader) {
-        this.devices = devices;
-        this.cardReader = cardReader;
+    constructor(card) {
+        super();
+        this.card = card;
     }
 
     issueCommand(commandApdu) {
-        //console.log(`Iso7816Application.issueCommand '${commandApdu}' `);
-        return this.devices
-            .issueCommand(this.cardReader, commandApdu)
+        console.log(`Iso7816Application.issueCommand '${commandApdu}' `);
+        return this.card
+            .issueCommand(commandApdu)
             .then(resp => {
                 var response = new ResponseApdu(resp);
                 //console.log(`status code '${response.statusCode()}'`);
@@ -56,7 +56,7 @@ class Iso7816Application {
     };
 
     selectFile(bytes, p1, p2) {
-        //console.log(`Iso7816Application.selectFile, file='${bytes}'`);
+        console.log(`Iso7816Application.selectFile, file='${bytes}'`);
         return this.issueCommand(new CommandApdu({
             cla: 0x00,
             ins: ins.SELECT_FILE,
@@ -67,7 +67,7 @@ class Iso7816Application {
     };
 
     getResponse(length) {
-        //console.log(`Iso7816Application.getResponse, length='${length}'`);
+        console.log(`Iso7816Application.getResponse, length='${length}'`);
         return this.issueCommand(new CommandApdu({
             cla: 0x00,
             ins: ins.GET_RESPONSE,
@@ -78,7 +78,7 @@ class Iso7816Application {
     };
 
     readRecord(sfi, record) {
-        //console.log(`Iso7816Application.readRecord, sfi='${sfi}', record=${record}`);
+        console.log(`Iso7816Application.readRecord, sfi='${sfi}', record=${record}`);
         return this.issueCommand(new CommandApdu({
             cla: 0x00,
             ins: ins.READ_RECORD,

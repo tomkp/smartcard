@@ -3,11 +3,13 @@
 import {EventEmitter} from 'events';
 import pcsclite from 'pcsclite';
 import Device from './Device';
+/*
 import hexify from 'hexify';
 import CommandApdu from './CommandApdu';
 import ResponseApdu from './ResponseApdu';
 import Card from './Card';
 import Iso7816 from './Iso7816Application';
+*/
 
 
 const pcsc = pcsclite();
