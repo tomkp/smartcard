@@ -1,8 +1,8 @@
 'use strict';
 
-const Smartcard = require('../lib/Smartcard');
+const Devices = require('../lib/Devices');
 
-const devices = new Smartcard();
+const devices = new Devices();
 
 
 devices.on('device-activated', function (event) {

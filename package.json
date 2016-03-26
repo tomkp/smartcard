@@ -20,7 +20,7 @@
     "url": "https://github.com/tomkp/smartcard/issues"
   },
   "homepage": "https://github.com/tomkp/smartcard",
-  "main": "lib/Smartcard.js",
+  "main": "lib/Devices.js",
   "scripts": {
     "compile": "babel -d lib/ src/",
     "compile:watch": "babel -w -d lib/ src/",
