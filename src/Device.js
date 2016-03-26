@@ -8,7 +8,7 @@ class Device extends EventEmitter {
     constructor(reader) {
         super();
         //console.log(`new Device(${reader})`);
-        this.reader = reader;
+        this.name = reader.name;
         this.card = null;
 
         const isCardInserted = (changes, reader, status) => {
@@ -54,12 +54,12 @@ class Device extends EventEmitter {
         });
     }
 
-    name() {
-        return this.reader.name;
+    getName() {
+        return this.name;
     }
 
     toString() {
-        return `${this.reader.name}`;
+        return `${this.getName()}`;
     }
 }
 

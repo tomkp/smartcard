@@ -12,16 +12,17 @@ class Card extends EventEmitter {
         //console.log(`new Card(${device}, ${reader}, ${status})`);
         this.device = device;
         this.reader = reader;
-        this.status = status;
+
         this.protocol = protocol;
+        this.atr = status.atr.toString('hex');
     }
 
-    atr() {
-        return this.status.atr.toString('hex');
+    getAtr() {
+        return this.atr;
     }
 
     toString() {
-        return `Card(atr:'${this.atr()}')`;
+        return `Card(atr:'${this.getAtr()}')`;
     }
 
     issueCommand(commandApdu, callback) {

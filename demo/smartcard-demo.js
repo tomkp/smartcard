@@ -17,7 +17,7 @@ devices.on('device-activated', function (event) {
 
     device.on('card-inserted', function (event) {
         let card = event.card;
-        console.log(`Card '${card.atr()}' inserted into '${event.device}'`);
+        console.log(`Card '${card.getAtr()}' inserted into '${event.device}'`);
 
         card.on('command-issued', function (event) {
             console.log(`Command '${event.command}' issued to '${event.card}' `);
