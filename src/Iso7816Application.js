@@ -89,4 +89,5 @@ class Iso7816Application extends EventEmitter {
     };
 }
 
-export default Iso7816Application;
+
+module.exports = Iso7816Application;

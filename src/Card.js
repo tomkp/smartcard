@@ -24,8 +24,9 @@ class Card extends EventEmitter {
         return `Card(atr:'${this.atr()}')`;
     }
 
-    issueCommand(command, callback) {
+    issueCommand(commandApdu, callback) {
 
+/*
         let commandBuffer;
         if (Array.isArray(command)) {
             commandBuffer = new Buffer(command);
@@ -36,27 +37,28 @@ class Card extends EventEmitter {
         } else {
             throw 'Unable to recognise command type (' + typeof command + ')';
         }
+*/
 
         const protocol = this.protocol;
 
-        this.emit('command-issued', {card: this, command: commandBuffer});
+        this.emit('command-issued', {card: this, command: commandApdu});
         if (callback) {
-            this.reader.transmit(commandBuffer, 0xFF, protocol, (err, response) => {
+            this.reader.transmit(commandApdu.toBuffer(), 0xFF, protocol, (err, response) => {
                 this.emit('response-received', {
                     card: this,
-                    command: commandBuffer,
+                    command: commandApdu,
                     response: new ResponseApdu(response)
                 });
                 callback(err, response);
             });
         } else {
             return new Promise((resolve, reject) => {
-                this.reader.transmit(commandBuffer, 0xFF, protocol, (err, response) => {
+                this.reader.transmit(commandApdu.toBuffer(), 0xFF, protocol, (err, response) => {
                     if (err) reject(err);
                     else {
                         this.emit('response-received', {
                             card: this,
-                            command: commandBuffer,
+                            command: commandApdu,
                             response: new ResponseApdu(response)
                         });
                         resolve(response);

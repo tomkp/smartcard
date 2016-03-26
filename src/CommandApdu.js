@@ -60,7 +60,7 @@ class CommandApdu {
     }
 
     toString() {
-        return hexify.toHexString(bytes);
+        return hexify.toHexString(this.bytes);
     }
 
     toByteArray() {
