@@ -1,6 +1,6 @@
 'use strict';
 
-const Devices = require('../lib/devices');
+const Devices = require('../lib/Smartcard');
 
 const devices = new Devices();
 
