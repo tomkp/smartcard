@@ -8,6 +8,7 @@ class Device extends EventEmitter {
     constructor(reader) {
         super();
         //console.log(`new Device(${reader})`);
+        this.reader = reader;
         this.name = reader.name;
         this.card = null;
 
@@ -24,7 +25,7 @@ class Device extends EventEmitter {
                 if (err) {
                     this.emit('error', err);
                 } else {
-                    this.card = new Card(this, reader, status, protocol);
+                    this.card = new Card(this, status.atr, protocol);
                     this.emit('card-inserted', {device: this, card: this.card});
                 }
             });
@@ -52,6 +53,10 @@ class Device extends EventEmitter {
                 }
             }
         });
+    }
+
+    transmit(data, res_len, protocol, cb) {
+        this.reader.transmit(data, res_len, protocol, cb);
     }
 
     getName() {

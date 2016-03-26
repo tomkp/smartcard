@@ -7,14 +7,12 @@ import ResponseApdu from './ResponseApdu';
 
 class Card extends EventEmitter {
 
-    constructor(device, reader, status, protocol) {
+    constructor(device, atr, protocol) {
         super();
         //console.log(`new Card(${device}, ${reader}, ${status})`);
         this.device = device;
-        this.reader = reader;
-
         this.protocol = protocol;
-        this.atr = status.atr.toString('hex');
+        this.atr = atr.toString('hex');
     }
 
     getAtr() {
@@ -22,7 +20,7 @@ class Card extends EventEmitter {
     }
 
     toString() {
-        return `Card(atr:'${this.getAtr()}')`;
+        return `Card(atr:'${this.atr}')`;
     }
 
     issueCommand(commandApdu, callback) {
@@ -45,7 +43,7 @@ class Card extends EventEmitter {
         this.emit('command-issued', {card: this, command: commandApdu});
         if (callback) {
 
-            this.reader.transmit(buffer, 0xFF, protocol, (err, response) => {
+            this.device.transmit(buffer, 0xFF, protocol, (err, response) => {
                 this.emit('response-received', {
                     card: this,
                     command: commandApdu,
@@ -55,7 +53,7 @@ class Card extends EventEmitter {
             });
         } else {
             return new Promise((resolve, reject) => {
-                this.reader.transmit(buffer, 0xFF, protocol, (err, response) => {
+                this.device.transmit(buffer, 0xFF, protocol, (err, response) => {
                     if (err) reject(err);
                     else {
                         this.emit('response-received', {
