@@ -52,6 +52,6 @@ devices.on('device-activated', function (event) {
 });
 
 devices.on('device-deactivated', function (event) {
-    console.log(`Device '${event.reader.name}' deactivated, devices: ${devices.listDevices()}`);
+    console.log(`Device '${event.device}' deactivated, devices: [${event.devices}]`);
 });
 

@@ -21,7 +21,7 @@ class Devices extends EventEmitter {
             this.emit('device-activated', {device, devices: this.listDevices()});
             reader.on('end', () => {
                 delete this.devices[reader.name];
-                this.emit('device-deactivated', {reader});
+                this.emit('device-deactivated', {device, devices: this.listDevices()});
             });
             reader.on('error', (error) => {
                 this.emit('error', {reader, error});
