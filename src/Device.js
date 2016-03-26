@@ -30,7 +30,6 @@ class Device extends EventEmitter {
             });
         };
 
-
         const cardRemoved = (reader) => {
             const name = reader.name;
             reader.disconnect(reader.SCARD_LEAVE_CARD, (err) => {
@@ -60,7 +59,7 @@ class Device extends EventEmitter {
     }
 
     toString() {
-        return `Device(name:'${this.reader.name}'`;
+        return `Device(name:'${this.reader.name}')`;
     }
 }
 
