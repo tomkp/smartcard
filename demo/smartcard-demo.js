@@ -1,5 +1,7 @@
 'use strict';
 
+const hexify = require('hexify');
+
 const api = require('../lib/index');
 const Devices = api.Devices;
 const Iso7816Application = api.Iso7816Application;
@@ -39,6 +41,9 @@ devices.on('device-activated', function (event) {
         application.selectFile([0x31, 0x50, 0x41, 0x59, 0x2E, 0x53, 0x59, 0x53, 0x2E, 0x44, 0x44, 0x46, 0x30, 0x31])
             .then(function (response) {
                 console.info(`Select PSE Response: '${response}' '${response.meaning()}'`);
+                return application.selectFile(hexify.toByteArray('a0000000041010'));
+            }).then(function (response) {
+                console.info(`Select Application Response: '${response}' '${response.meaning()}'`);
             }).catch(function (error) {
                 console.error('Error:', error, error.stack);
             });
