@@ -4,7 +4,7 @@ Smartcard library.
 
 ## example
 
-```
+```javascript
 'use strict';
 
 const smartcard = require('smartcard');
