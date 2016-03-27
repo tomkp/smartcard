@@ -87,6 +87,17 @@ class Iso7816Application extends EventEmitter {
             le: 0
         }));
     };
+
+    getData(p1, p2) {
+        console.log(`Iso7816Application.getData, p1='${p1}', p2=${p2}`);
+        return this.issueCommand(new CommandApdu({
+            cla: 0x00,
+            ins: ins.GET_DATA,
+            p1: p1,
+            p2: p2,
+            le: 0
+        }));
+};
 }
 
 
