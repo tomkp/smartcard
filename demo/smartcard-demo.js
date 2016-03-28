@@ -5,6 +5,7 @@ const hexify = require('hexify');
 const api = require('../lib/index');
 const Devices = api.Devices;
 const Iso7816Application = api.Iso7816Application;
+const CommandApdu = api.CommandApdu;
 
 const devices = new Devices();
 
@@ -44,6 +45,10 @@ devices.on('device-activated', function (event) {
                 return application.selectFile(hexify.toByteArray('a0000000041010'));
             }).then(function (response) {
                 console.info(`Select Application Response: '${response}' '${response.meaning()}'`);
+                return application.issueCommand(new CommandApdu({bytes: [0x80, 0xa8, 0x00, 0x00, 0x02, 0x83, 0x00, 0x00]}));
+            }).then(function (response) {
+                console.info(`Get Processing Options Response: '${response}' '${response.meaning()}'`);
+                return response;
             }).catch(function (error) {
                 console.error('Error:', error, error.stack);
             });
