@@ -36,32 +36,22 @@ class Iso7816Application extends EventEmitter {
     }
 
     issueCommand(commandApdu) {
-        console.log(`Iso7816Application.issueCommand '${commandApdu}'`);
-
+        console.log(`Iso7816Application.issueCommand '${commandApdu}' `);
         return this.card
             .issueCommand(commandApdu)
             .then(resp => {
-                let response = new ResponseApdu(resp);
-                let returnResponse;
+                var response = new ResponseApdu(resp);
                 //console.log(`status code '${response.statusCode()}'`);
                 if (response.hasMoreBytesAvailable()) {
                     //console.log(`has '${response.numberOfBytesAvailable()}' more bytes available`);
-                    returnResponse = this.getResponse(response.numberOfBytesAvailable());
+                    return this.getResponse(response.numberOfBytesAvailable());
                 } else if (response.isWrongLength()) {
                     //console.log(`'le' should be '${response.correctLength()}' bytes`);
                     commandApdu.setLe(response.correctLength());
-                    returnResponse = this.card.issueCommand(commandApdu);
-                } else {
-                    returnResponse = response;
+                    return this.issueCommand(commandApdu);
                 }
-                if (commandApdu.getIns() === 'a4') {
-                    this.emit('application-selected', {
-                        card: this.card,
-                        command: commandApdu,
-                        response: returnResponse
-                    });
-                }
-                return returnResponse;
+                //console.log(`return response '${response}' `);
+                return response;
             });
     };
 
