@@ -41,7 +41,7 @@ devices.on('device-activated', function (event) {
         const application = new Iso7816Application(card);
 
         application.on('application-selected', function(event) {
-            console.log(`Application Selected ${event.command} ${event.response}`);
+            console.log(`Application Selected ${event.application}`);
         });
 
         application.selectFile([0x31, 0x50, 0x41, 0x59, 0x2E, 0x53, 0x59, 0x53, 0x2E, 0x44, 0x44, 0x46, 0x30, 0x31])

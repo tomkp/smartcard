@@ -67,9 +67,7 @@ class Iso7816Application extends EventEmitter {
         return this.issueCommand(commandApdu).then((response) => {
             if (response.isOk()) {
                 this.emit('application-selected', {
-                    card: this.card,
-                    command: commandApdu,
-                    response: response
+                    application: hexify.toHexString(bytes)
                 });
             }
             return response;
