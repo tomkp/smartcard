@@ -84,6 +84,10 @@ class CommandApdu {
         this.bytes.pop();
         this.bytes.push(le);
     }
+
+    getIns() {
+        return this.bytes[1].toString(16);
+    }
 }
 
 export default CommandApdu;
