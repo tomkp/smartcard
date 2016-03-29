@@ -53,7 +53,6 @@ class CommandApdu {
                 //lc = 0;
             }
 
-            if (data) console.log(`lc: ${lc} ${data} ${data.length}`);
             this.bytes = [];
             this.bytes.push(cla);
             this.bytes.push(ins);
@@ -83,10 +82,6 @@ class CommandApdu {
     setLe(le) {
         this.bytes.pop();
         this.bytes.push(le);
-    }
-
-    getIns() {
-        return this.bytes[1].toString(16);
     }
 }
 

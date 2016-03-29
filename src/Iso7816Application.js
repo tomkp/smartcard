@@ -57,13 +57,24 @@ class Iso7816Application extends EventEmitter {
 
     selectFile(bytes, p1, p2) {
         console.log(`Iso7816Application.selectFile, file='${bytes}'`);
-        return this.issueCommand(new CommandApdu({
+        var commandApdu = new CommandApdu({
             cla: 0x00,
             ins: ins.SELECT_FILE,
             p1: p1 || 0x04,
             p2: p2 || 0x00,
             data: bytes
-        }));
+        });
+        return this.issueCommand(commandApdu).then((response) => {
+            if (response.isOk()) {
+                this.emit('application-selected', {
+                    card: this.card,
+                    command: commandApdu,
+                    response: response
+                });
+            }
+            return response;
+        });
+
     };
 
     getResponse(length) {
