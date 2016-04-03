@@ -3,6 +3,14 @@
 import {EventEmitter} from 'events';
 import hexify from 'hexify';
 
+/*
+CASE    COMMAND     RESPONSE
+1       NO DATA     NO DATA
+2       DATA        NO DATA
+3       NO DATA     DATA
+4       DATA        DATA
+*/
+
 class CommandApdu {
     constructor(obj) {
 
