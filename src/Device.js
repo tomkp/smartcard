@@ -37,7 +37,7 @@ class Device extends EventEmitter {
                 if (err) {
                     this.emit('error', err);
                 } else {
-                    this.emit('card-removed', {name});
+                    this.emit('card-removed', {name, card: this.card});
                     this.card = null;
                 }
             });

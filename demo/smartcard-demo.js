@@ -20,7 +20,7 @@ devices.on('device-activated', function (event) {
 
     device.on('card-inserted', function (event) {
         let card = event.card;
-        console.log(`Card '${card.getAtr()}' inserted into '${event.device}'`);
+        console.log(`\nCard '${card.getAtr()}' inserted into '${event.device}'`);
 
         card.on('command-issued', function (event) {
             console.log(`Command '${event.command}' issued to '${event.card}' `);
@@ -61,7 +61,7 @@ devices.on('device-activated', function (event) {
 
     });
     device.on('card-removed', function (event) {
-        console.log(`Card removed from '${event.name}' `);
+        console.log(`Card ${event.card.getAtr()} removed from '${event.name}' `);
     });
 
 });
