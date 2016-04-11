@@ -1,6 +1,6 @@
 {
   "name": "smartcard",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "author": "tomkp <tom@tomkp.com>",
   "keywords": [
     "pcsc",
