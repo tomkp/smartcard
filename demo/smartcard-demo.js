@@ -14,11 +14,10 @@ devices.on('device-activated', function (event) {
     const currentDevices = event.devices;
     let device = event.device;
     console.log(`Device '${device}' activated, devices: ${currentDevices}`);
-    for (let prop in currentDevices) {
-        console.log("Devices: " + currentDevices[prop]);
-    }
+    currentDevices.map((device, index) => {
+        console.log(`Device #${index + 1}: ${device.name}`);
+    });
 
-    console.log(`devices.toString() ${devices.toString()}`);
 
     device.on('card-inserted', function (event) {
         let card = event.card;
