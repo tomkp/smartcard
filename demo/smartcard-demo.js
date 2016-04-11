@@ -18,6 +18,8 @@ devices.on('device-activated', function (event) {
         console.log("Devices: " + currentDevices[prop]);
     }
 
+    console.log(`devices.toString() ${devices.toString()}`);
+
     device.on('card-inserted', function (event) {
         let card = event.card;
         console.log(`\nCard '${card.getAtr()}' inserted into '${event.device}'`);
@@ -61,7 +63,7 @@ devices.on('device-activated', function (event) {
 
     });
     device.on('card-removed', function (event) {
-        console.log(`Card ${event.card.getAtr()} removed from '${event.name}' `);
+        console.log(`Card ${event.card} removed from '${event.name}' `);
     });
 
 });

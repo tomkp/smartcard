@@ -17,7 +17,7 @@ class Devices extends EventEmitter {
 
         this.pcsc.on('reader', (reader) => {
             const device = new Device(reader);
-            this.devices[reader.name] = {};
+            this.devices[reader.name] = device;
             this.emit('device-activated', {device, devices: this.listDevices()});
             reader.on('end', () => {
                 delete this.devices[reader.name];
@@ -34,11 +34,11 @@ class Devices extends EventEmitter {
     }
 
     listDevices() {
-        return Object.keys(this.devices);
+        return Object.keys(this.devices).map((k) => this.devices[k])
     };
 
     toString() {
-        return `Devices(devices:'${this.listDevices()}')`;
+        return `Devices('${this.listDevices()}')`;
     }
 }
 
