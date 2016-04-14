@@ -37,6 +37,10 @@ class Devices extends EventEmitter {
         return Object.keys(this.devices).map((k) => this.devices[k])
     };
 
+    lookup(name) {
+        return this.devices[name];
+    };
+
     toString() {
         return `Devices('${this.listDevices()}')`;
     }
