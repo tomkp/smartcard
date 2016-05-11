@@ -7,7 +7,7 @@ const Devices = api.Devices;
 const devices = new Devices();
 
 
-devices.on('device-activated', function (event) {
+devices.onActivated().then(event => {
     const currentDevices = event.devices;
     let device = event.device;
     console.log(`Device '${device}' activated, devices: ${currentDevices}`);
