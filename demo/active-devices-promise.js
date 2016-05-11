@@ -1,7 +1,5 @@
 'use strict';
 
-const hexify = require('hexify');
-
 const api = require('../lib/index');
 const Devices = api.Devices;
 const devices = new Devices();
