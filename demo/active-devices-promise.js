@@ -1,7 +1,7 @@
 'use strict';
 
-const api = require('../lib/index');
-const Devices = api.Devices;
+const smartcard = require('../lib/index');
+const Devices = smartcard.Devices;
 const devices = new Devices();
 
 
