@@ -39,6 +39,12 @@ class Devices extends EventEmitter {
       });
     };
 
+    onDeactivated() {
+        return new Promise((resolve, reject) => {
+            this.on('device-deactivated', event => resolve(event));
+        });
+    };
+
     listDevices() {
         return Object.keys(this.devices).map((k) => this.devices[k])
     };
