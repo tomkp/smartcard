@@ -2,6 +2,9 @@
 
 Smartcard library.
 
+This is a simple wrapper around [Santiago Gimeno's](https://www.npmjs.org/~sgimeno) great [pcsclite](https://github.com/santigimeno/node-pcsclite) library.
+
+
 ## example
 
 ```javascript
