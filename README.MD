@@ -1,8 +1,55 @@
 # smartcard
 
+
 Smartcard library.
 
-## example
+This is a simple wrapper around [Santiago Gimeno's](https://www.npmjs.org/~sgimeno) great [pcsclite](https://github.com/santigimeno/node-pcsclite) library.
+
+Used by [Card Spy](http://card-spy.surge.sh)
+
+## Examples
+
+
+### With event emitter
+
+```javascript
+'use strict';
+
+const smartcard = require('smartcard');
+const Devices = smartcard.Devices;
+const devices = new Devices();
+
+
+devices.on('device-activated', (event => {
+    console.log(`Device '${event.device}' activated`);
+    event.devices.map((device, index) => {
+        console.log(`Device #${index + 1}: '${device.name}'`);
+    });
+}));
+```
+
+
+### Using promises
+
+```javascript
+'use strict';
+
+const smartcard = require('smartcard');
+const Devices = smartcard.Devices;
+const devices = new Devices();
+
+
+devices.onActivated().then(event => {
+    console.log(`Device '${event.device}' activated`);
+    event.devices.map((device, index) => {
+        console.log(`Device #${index + 1}: '${device.name}'`);
+    });
+});
+```
+
+
+### Selecting the Payment Systems Environment on an EMV (Chip & Pin) card
+
 
 ```javascript
 'use strict';
