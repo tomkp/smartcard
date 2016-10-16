@@ -10,7 +10,7 @@ const CommandApdu = api.CommandApdu;
 const devices = new Devices();
 
 
-devices.on('device-activated', event=> {
+devices.on('device-activated', event => {
     const currentDevices = event.devices;
     let device = event.device;
     console.log(`Device '${device}' activated, devices: ${currentDevices}`);
@@ -19,15 +19,15 @@ devices.on('device-activated', event=> {
     });
 
 
-    device.on('card-inserted', (event) => {
+    device.on('card-inserted', event => {
         let card = event.card;
         console.log(`\nCard '${card.getAtr()}' inserted into '${event.device}'`);
 
-        card.on('command-issued', (event) => {
+        card.on('command-issued', event => {
             console.log(`Command '${event.command}' issued to '${event.card}' `);
         });
 
-        card.on('response-received', (event) => {
+        card.on('response-received', event => {
             console.log(`Response '${event.response}' received from '${event.card}' in response to '${event.command}'`);
         });
 
@@ -41,7 +41,7 @@ devices.on('device-activated', event=> {
 
         const application = new Iso7816Application(card);
 
-        application.on('application-selected', function (event) {
+        application.on('application-selected', event => {
             console.log(`Application Selected ${event.application}`);
         });
 
@@ -50,22 +50,22 @@ devices.on('device-activated', event=> {
                 console.info(`Select PSE Response: '${response}' '${response.meaning()}'`);
                 return application.selectFile(hexify.toByteArray('a0000000041010'));
             }).then((response) => {
-                console.info(`Select Application Response: '${response}' '${response.meaning()}'`);
-                return application.issueCommand(new CommandApdu({bytes: [0x80, 0xa8, 0x00, 0x00, 0x02, 0x83, 0x00, 0x00]}));
-            }).then((response) => {
-                console.info(`Get Processing Options Response: '${response}' '${response.meaning()}'`);
-                return response;
-            }).catch((error) => {
-                console.error('Error:', error, error.stack);
-            });
+            console.info(`Select Application Response: '${response}' '${response.meaning()}'`);
+            return application.issueCommand(new CommandApdu({bytes: [0x80, 0xa8, 0x00, 0x00, 0x02, 0x83, 0x00, 0x00]}));
+        }).then((response) => {
+            console.info(`Get Processing Options Response: '${response}' '${response.meaning()}'`);
+            return response;
+        }).catch((error) => {
+            console.error('Error:', error, error.stack);
+        });
     });
-    device.on('card-removed', (event) => {
+    device.on('card-removed', event => {
         console.log(`Card ${event.card} removed from '${event.name}' `);
     });
 
 });
 
-devices.on('device-deactivated', (event) => {
+devices.on('device-deactivated', event => {
     console.log(`Device '${event.device}' deactivated, devices: [${event.devices}]`);
 });
 
