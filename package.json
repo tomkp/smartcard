@@ -30,7 +30,7 @@
   "dependencies": {
     "core-js": "^2.4.1",
     "hexify": "^1.0.1",
-    "pcsclite": "^0.4.11"
+    "pcsclite": "santigimeno/node-pcsclite#pull/62/head"
   },
   "devDependencies": {
     "babel-cli": "^6.18.0",
