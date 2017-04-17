@@ -28,7 +28,6 @@
     "release:patch": "npm run compile && npm version patch && git push && npm publish"
   },
   "dependencies": {
-    "core-js": "^2.4.1",
     "hexify": "^1.0.1",
     "pcsclite": "^0.5.0"
   },
