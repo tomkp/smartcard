@@ -36,27 +36,33 @@ class Iso7816Application extends EventEmitter {
     }
 
     issueCommand(commandApdu) {
-        console.log(`Iso7816Application.issueCommand '${commandApdu}' `);
+        //console.log(`Iso7816Application.issueCommand '${commandApdu}' `);
         return this.card
             .issueCommand(commandApdu)
             .then(resp => {
                 var response = new ResponseApdu(resp);
                 //console.log(`status code '${response.statusCode()}'`);
                 if (response.hasMoreBytesAvailable()) {
-                    //console.log(`has '${response.numberOfBytesAvailable()}' more bytes available`);
-                    return response.data + this.getResponse(response.numberOfBytesAvailable()).data;
+                    //console.log(`has '${response.data.length}' more bytes available`);
+                    var res = this.getResponse(response.numberOfBytesAvailable()).then((resp) => {
+                      var resp = new ResponseApdu(resp);
+                      return response.data.substr(0, response.data.length-4) + resp.data;
+                    });
+                    return res;
                 } else if (response.isWrongLength()) {
-                    //console.log(`'le' should be '${response.correctLength()}' bytes`);
-                    commandApdu.setLe(response.correctLength());
-                    return response.data + this.issueCommand(commandApdu).data;
+                  //TODO: Fix to properly work recursivaly
+                  //console.log(`'le' should be '${response.correctLength()}' bytes`);
+                  commandApdu.setLe(response.correctLength());
+                  return response.data + this.issueCommand(commandApdu).data;
                 }
                 //console.log(`return response '${response}' `);
-                return response;
+                //console.log(response)
+                return response.data.substr(0, response.data.length-4);
             });
     };
 
     selectFile(bytes, p1, p2) {
-        console.log(`Iso7816Application.selectFile, file='${bytes}'`);
+        //console.log(`Iso7816Application.selectFile, file='${bytes}'`);
         var commandApdu = new CommandApdu({
             cla: 0x00,
             ins: ins.SELECT_FILE,
@@ -78,7 +84,7 @@ class Iso7816Application extends EventEmitter {
     getResponse(length) {
 	      //When response is over 254 bytes long, I get buffer size errors
         if(length > 0xfd || length == 0x00) length=0xfd;
-        console.log(`Iso7816Application.getResponse, length='${length}'`);
+        //console.log(`Iso7816Application.getResponse, length='${length}'`);
         return this.issueCommand(new CommandApdu({
             cla: 0x00,
             ins: ins.GET_RESPONSE,
@@ -89,7 +95,7 @@ class Iso7816Application extends EventEmitter {
     };
 
     readRecord(sfi, record) {
-        console.log(`Iso7816Application.readRecord, sfi='${sfi}', record=${record}`);
+        //console.log(`Iso7816Application.readRecord, sfi='${sfi}', record=${record}`);
         return this.issueCommand(new CommandApdu({
             cla: 0x00,
             ins: ins.READ_RECORD,
@@ -100,7 +106,7 @@ class Iso7816Application extends EventEmitter {
     };
 
     getData(p1, p2) {
-        console.log(`Iso7816Application.getData, p1='${p1}', p2=${p2}`);
+        //console.log(`Iso7816Application.getData, p1='${p1}', p2=${p2}`);
         return this.issueCommand(new CommandApdu({
             cla: 0x00,
             ins: ins.GET_DATA,
