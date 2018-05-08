@@ -29,7 +29,7 @@ const ins = {
 
 
 class Iso7816Application extends EventEmitter {
-    
+
     constructor(card) {
         super();
         this.card = card;
@@ -76,6 +76,8 @@ class Iso7816Application extends EventEmitter {
     };
 
     getResponse(length) {
+	      //When response is over 254 bytes long, I get buffer size errors
+        if(length > 0xfd || length == 0x00) length=0xfd;
         console.log(`Iso7816Application.getResponse, length='${length}'`);
         return this.issueCommand(new CommandApdu({
             cla: 0x00,
