@@ -44,11 +44,11 @@ class Iso7816Application extends EventEmitter {
                 //console.log(`status code '${response.statusCode()}'`);
                 if (response.hasMoreBytesAvailable()) {
                     //console.log(`has '${response.numberOfBytesAvailable()}' more bytes available`);
-                    return this.getResponse(response.numberOfBytesAvailable());
+                    return response.data + this.getResponse(response.numberOfBytesAvailable()).data;
                 } else if (response.isWrongLength()) {
                     //console.log(`'le' should be '${response.correctLength()}' bytes`);
                     commandApdu.setLe(response.correctLength());
-                    return this.issueCommand(commandApdu);
+                    return response.data + this.issueCommand(commandApdu).data;
                 }
                 //console.log(`return response '${response}' `);
                 return response;
