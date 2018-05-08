@@ -25,6 +25,7 @@
     "compile": "babel -d lib/ src/",
     "compile:watch": "babel -w -d lib/ src/",
     "prepublish": "npm run compile",
+    "preinstall": "npm run prepublish",
     "release:patch": "npm run compile && npm version patch && git push && npm publish"
   },
   "dependencies": {
