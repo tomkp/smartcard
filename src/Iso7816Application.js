@@ -49,7 +49,6 @@ class Iso7816Application extends EventEmitter {
                       return new ResponseApdu(response.getDataOnly() + resp.data);
                     });
                 } else if (response.isWrongLength()) {
-                  //TODO: Fix to properly work recursivaly
                   //console.log(`'le' should be '${response.correctLength()}' bytes`);
                   commandApdu.setLe(response.correctLength());
                   return this.issueCommand(commandApdu).then((resp) => {
@@ -84,8 +83,6 @@ class Iso7816Application extends EventEmitter {
     };
 
     getResponse(length) {
-	      //When response is over 254 bytes long, I get buffer size errors
-        //if(length > 0xfd || length == 0x00) length=0xfd;
         //console.log(`Iso7816Application.getResponse, length='${length}'`);
         return this.issueCommand(new CommandApdu({
             cla: 0x00,

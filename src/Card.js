@@ -42,7 +42,6 @@ class Card extends EventEmitter {
 
         this.emit('command-issued', {card: this, command: commandApdu});
         if (callback) {
-
             this.device.transmit(buffer, 0x102, protocol, (err, response) => {
                 this.emit('response-received', {
                     card: this,
