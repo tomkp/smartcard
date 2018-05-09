@@ -44,20 +44,22 @@ class Iso7816Application extends EventEmitter {
                 //console.log(`status code '${response.statusCode()}'`);
                 if (response.hasMoreBytesAvailable()) {
                     //console.log(`has '${response.data.length}' more bytes available`);
-                    var res = this.getResponse(response.numberOfBytesAvailable()).then((resp) => {
+                    return this.getResponse(response.numberOfBytesAvailable()).then((resp) => {
                       var resp = new ResponseApdu(resp);
-                      return response.data.substr(0, response.data.length-4) + resp.data;
+                      return new ResponseApdu(response.getDataOnly() + resp.data);
                     });
-                    return res;
                 } else if (response.isWrongLength()) {
                   //TODO: Fix to properly work recursivaly
                   //console.log(`'le' should be '${response.correctLength()}' bytes`);
                   commandApdu.setLe(response.correctLength());
-                  return response.data + this.issueCommand(commandApdu).data;
+                  return this.issueCommand(commandApdu).then((resp) => {
+                    var resp = new ResponseApdu(resp);
+                    return new ResponseApdu(response.getDataOnly() + resp.data);
+                  });
                 }
                 //console.log(`return response '${response}' `);
                 //console.log(response)
-                return response.data.substr(0, response.data.length-4);
+                return response;
             });
     };
 
