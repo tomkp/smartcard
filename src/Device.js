@@ -21,7 +21,7 @@ class Device extends EventEmitter {
         };
 
         const cardInserted = (reader, status) => {
-            reader.connect((err, protocol) => {
+            reader.connect({share_mode: 'SCARD_SHARE_SHARED'},(err, protocol) => {
                 if (err) {
                     this.emit('error', err);
                 } else {
