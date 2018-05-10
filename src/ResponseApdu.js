@@ -58,7 +58,9 @@ class ResponseApdu {
         }
         return 'Unknown';
     }
-
+    getDataOnly() {
+      return this.data.substr(0, this.data.length-4);
+    }
     getStatusCode() {
         return this.data.substr(-4);
     }
