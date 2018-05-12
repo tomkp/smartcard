@@ -57,6 +57,7 @@ Returns `Object` a list of the different devices attached, each a `device` objec
 
 ##### `devices.lookup(name)`
 * _name_ `String`: The text name of a device
+
 * Returns `Device`
 
 
@@ -84,12 +85,14 @@ The `device` object emits the following events
 
 ##### Event: 'card-inserted'
 Emitted when a smartcard is inserted into a card reader
+
 Returns `Object`:
 * _device_ `Device`
 * _card_ `Card`
 
 ##### Event: 'card-removed'
 Emitted when a smartcard is removed from a card reader
+
 Returns `Object`:
 * _name_ `String`
 * _card_ `Card`
@@ -113,6 +116,7 @@ Sends a command to the card
 * _callback(error,response)_: (optional) Function to call upon completion of the command
   * _error_ `Error`
   * _response_ `Buffer`
+
 Returns `Promise`
   * Resolves with _response_ `Buffer`
   * Rejects with _error_ `Error`
@@ -124,12 +128,14 @@ The `card` object emits the following events
 
 ##### Event: 'command-issued'
 Emitted when a command is sent to the smartcard.
+
 Returns `Object`:
 * _card_ `Card`
 * _command_ `Buffer`
 
 ##### Event: 'response-received'
 Emitted when a response is received from the card.
+
 Returns `Object`:
 * _card_ `Card`
 * _command_ `Buffer`
@@ -150,6 +156,7 @@ Creates a new instance and sets the appropriate items
   * _p2_ `Number`: The value of p2
   * _data_ `Array` (optional): The value of data
   * _le_ `Number` (optional): The value of le
+
 OR
 * _obj_ `Array`: Byte array representing the whole command
 
@@ -266,6 +273,7 @@ The `Iso7816Application` class emits the following events
 
 ##### Event: 'application-selected'
 Emitted when a successful reply to a `selectFile()` command is received.
+
 Returns `Object`:
 * _application_ `String`
 
