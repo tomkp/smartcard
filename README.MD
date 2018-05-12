@@ -56,8 +56,9 @@ Returns `Promise`
 Returns `Object` a list of the different devices attached, each a `device` object
 
 ##### `devices.lookup(name)`
-* `name`: The text name of a device
-Returns the `device` object corresponding to the provided name.
+* _name_ `String`: The text name of a device
+* Returns `Device`
+
 
 
 ### Class: Device
