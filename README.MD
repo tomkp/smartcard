@@ -225,6 +225,7 @@ Sets up the `Iso7816Application` object
 ##### `Iso7816Application.issueCommand(commandApdu)`
 Sends the provided command to the card. Automatically retrieve the full response, even if it requires multiple GET_RESPONSE commands
 * _commandApdu_ `CommandApdu`: Command to send to the card
+
 Returns
 * `ResponseApdu` Complete response from card
 
@@ -233,12 +234,14 @@ Sends the SELECT command to the card, often called selecting an application
 * _bytes_ `Buffer`: The resource locater (AID, etc)
 * _p1_ `Number`: Value to specify as the p1 value
 * _p2_ `Number`: Value to specify as the p2 value
+
 Returns
 * `ResponseApdu` Complete response from card
 
 ##### `Iso7816Application.getResponse(length)`
 Sends a single GET_RESPONSE command to the card
 * _length_ `Number`: The length of the response expected, maximum is 0xFF
+
 Returns
 * `ResponseApdu` Complete response from card
 
@@ -246,6 +249,7 @@ Returns
 Sends a READ_RECORD command to the card
 * _sfi_ `Number`: The sfi
 * _record_ `Number`: The record
+
 Returns
 * `ResponseApdu` Complete response from card
 
@@ -253,6 +257,7 @@ Returns
 Sends a GET_DATA command to the card
 * _p1_ `Number`: Value to specify as the p1 value
 * _p2_ `Number`: Value to specify as the p2 value
+
 Returns
 * `ResponseApdu` Complete response from card
 
