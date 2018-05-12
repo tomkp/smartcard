@@ -7,6 +7,86 @@ This is a simple wrapper around [Santiago Gimeno's](https://www.npmjs.org/~sgime
 
 Used by [Card Spy](http://card-spy.surge.sh)
 
+## API
+
+The following objects are defined by the `smartcard` library, each contains its own set of methods and events.
+
+### Class: Devices
+A general object that provides access to all smartcard related devices.
+
+#### Events
+The `devices` object emits the following events
+
+##### Event: 'device-activated'
+Emitted when a card reader is attached.
+
+##### Event: 'device-deactivated'
+Emitted when a card reader is detached.
+
+#### Methods
+The following methods are available within the `devices` object.
+
+##### Constructor
+The constructor for a devices object takes no arguments,
+```javascript
+devices = new Devices();
+```
+##### `devices.onActivated()`
+Returns `Promise` that resolves when a device is activated
+
+##### `devices.onDeactivated()`
+Returns `Promise` that resolves when a device is deactivated
+
+##### `devices.listDevices()`
+Returns `Object` a list of the different devices attached, each a `device` object
+
+##### `devices.lookup()`
+* `name`: The text name of a device
+Returns the `device` object corresponding to the provided name.
+
+
+### Class: Device
+An object representing a specific card reader (device).
+
+#### Methods
+The following methods are available within the `device` object.
+
+##### `device.getName()`
+
+##### `device.transmit()`
+Sends a command to the connected device
+* _data_ `Buffer`: data to be transmitted
+* _res_len_ `Number`: Maximum length of the expected response, includes the 2 byte response (sw1 and sw2)
+* _protocol_ `Number`: Protocol to be used in the transmission
+* _cb_ `Function`: Called when transit function completes
+  * _error_ `Error`
+  * _output_ `Buffer`
+
+#### Events
+The `device` object emits the following events
+
+##### Event: 'card-inserted'
+Emitted when a smartcard is inserted into a card reader
+
+##### Event: 'card-removed'
+Emitted when a smartcard is removed from a card reader
+
+### Class: Card
+An object representing an attached smart card.
+
+#### Events
+The `card` object emits the following events
+
+##### Event: 'command-issued'
+Emitted when a command is sent to the smartcard.
+
+##### Event: 'response-received'
+Emitted when a response is received from the card.
+
+##### Event: 'application-selected'
+Emitted when a successful reply to a `selectFile()` command is received.
+
+
 ## Examples
 
 
