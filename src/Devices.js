@@ -5,9 +5,6 @@ import pcsclite from 'pcsclite';
 import Device from './Device';
 
 
-const pcsc = pcsclite();
-
-
 class Devices extends EventEmitter {
     constructor() {
         super();
