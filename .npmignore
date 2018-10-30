@@ -1,1 +1,5 @@
-src/
+/node_modules
+*.iml
+*.log
+.idea
+/src
