@@ -27,8 +27,8 @@
     "release:patch": "npm run compile && npm version patch && git push && npm publish"
   },
   "dependencies": {
-    "hexify": "^1.0.1",
-    "pcsclite": "^0.6.0"
+    "@pokusew/pcsclite": "^0.4.18",
+    "hexify": "^1.0.1"
   },
   "devDependencies": {
     "babel-cli": "^6.26.0",
