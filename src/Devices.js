@@ -1,6 +1,6 @@
 'use strict';
 
-const pcsclite = require('@pokusew/pcsclite');
+const pcsclite = require('pcsclite');
 import {EventEmitter} from 'events';
 import Device from './Device';
 
