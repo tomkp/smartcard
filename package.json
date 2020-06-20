@@ -1,6 +1,6 @@
 {
   "name": "smartcard",
-  "version": "1.0.32",
+  "version": "1.0.34",
   "author": "tomkp <tom@tomkp.com>",
   "keywords": [
     "pcsc",
@@ -24,14 +24,27 @@
   "scripts": {
     "compile": "babel -d lib/ src/",
     "compile:watch": "babel -w -d lib/ src/",
-    "release:patch": "npm run compile && npm version patch && git push && npm publish"
+    "release:patch": "npm run compile && npm version patch && git push && npm publish",
+    "prettier": "prettier --write \"{src,ingest,config}/**/*.{js,ts}\""
   },
   "dependencies": {
     "hexify": "^1.0.1",
-    "pcsclite": "^1.0.0"
+    "pcsclite": "^1.0.0",
+    "pino": "^6.3.2"
   },
   "devDependencies": {
     "babel-cli": "^6.26.0",
-    "babel-preset-es2015": "^6.24.1"
+    "babel-preset-es2015": "^6.24.1",
+    "husky": "^4.2.5",
+    "lint-staged": "^10.2.11",
+    "prettier": "^2.0.5"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged"
+    }
+  },
+  "lint-staged": {
+    "*.{js,ts,json,md}": "prettier --write"
   }
 }

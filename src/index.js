@@ -8,10 +8,10 @@ import Device from './Device';
 import Card from './Card';
 
 module.exports = {
-    Iso7816Application,
-    CommandApdu,
-    ResponseApdu,
-    Devices,
-    Device,
-    Card
-}
+  Iso7816Application,
+  CommandApdu,
+  ResponseApdu,
+  Devices,
+  Device,
+  Card,
+};
