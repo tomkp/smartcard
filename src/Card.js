@@ -3,11 +3,14 @@
 import { EventEmitter } from 'events';
 import hexify from 'hexify';
 import ResponseApdu from './ResponseApdu';
+import pino from 'pino';
+
+const logger = pino({ name: 'Card' });
 
 class Card extends EventEmitter {
   constructor(device, atr, protocol) {
     super();
-    //console.log(`new Card(${device}, ${reader}, ${status})`);
+    logger.debug(`new Card(${device})`);
     this.device = device;
     this.protocol = protocol;
     this.atr = atr.toString('hex');
