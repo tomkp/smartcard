@@ -4,7 +4,8 @@ import { EventEmitter } from 'events';
 import hexify from 'hexify';
 import CommandApdu from './CommandApdu';
 import ResponseApdu from './ResponseApdu';
-
+import pino from 'pino';
+const logger = pino({ name: 'Iso7816Application' });
 const ins = {
   APPEND_RECORD: 0xe2,
   ENVELOPE: 0xc2,
@@ -33,35 +34,34 @@ class Iso7816Application extends EventEmitter {
   }
 
   issueCommand(commandApdu) {
-    //console.log(`Iso7816Application.issueCommand '${commandApdu}' `);
+    logger.debug(`issueCommand '${commandApdu}' `);
     return this.card.issueCommand(commandApdu).then((resp) => {
-      var response = new ResponseApdu(resp);
-      //console.log(`status code '${response.statusCode()}'`);
+      const response = new ResponseApdu(resp);
+      logger.debug(`status code '${response.statusCode}'`);
       if (response.hasMoreBytesAvailable()) {
-        //console.log(`has '${response.data.length}' more bytes available`);
+        logger.debug(`has '${response.data.length}' more bytes available`);
         return this.getResponse(response.numberOfBytesAvailable()).then(
           (resp) => {
-            var resp = new ResponseApdu(resp);
-            return new ResponseApdu(response.getDataOnly() + resp.data);
+            const responseApdu = new ResponseApdu(resp);
+            return new ResponseApdu(response.getDataOnly() + responseApdu.data);
           }
         );
       } else if (response.isWrongLength()) {
-        //console.log(`'le' should be '${response.correctLength()}' bytes`);
+        logger.debug(`'le' should be '${response.correctLength()}' bytes`);
         commandApdu.setLe(response.correctLength());
         return this.issueCommand(commandApdu).then((resp) => {
-          var resp = new ResponseApdu(resp);
-          return new ResponseApdu(response.getDataOnly() + resp.data);
+          const responseApdu = new ResponseApdu(resp);
+          return new ResponseApdu(response.getDataOnly() + responseApdu.data);
         });
       }
-      //console.log(`return response '${response}' `);
-      //console.log(response)
+      logger.debug(`return response '${response}' `);
       return response;
     });
   }
 
   selectFile(bytes, p1, p2) {
-    //console.log(`Iso7816Application.selectFile, file='${bytes}'`);
-    var commandApdu = new CommandApdu({
+    logger.debug(`selectFile, file='${bytes}'`);
+    const commandApdu = new CommandApdu({
       cla: 0x00,
       ins: ins.SELECT_FILE,
       p1: p1 || 0x04,
@@ -79,7 +79,7 @@ class Iso7816Application extends EventEmitter {
   }
 
   getResponse(length) {
-    //console.log(`Iso7816Application.getResponse, length='${length}'`);
+    logger.debug(`getResponse, length='${length}'`);
     return this.issueCommand(
       new CommandApdu({
         cla: 0x00,
@@ -92,7 +92,7 @@ class Iso7816Application extends EventEmitter {
   }
 
   readRecord(sfi, record) {
-    //console.log(`Iso7816Application.readRecord, sfi='${sfi}', record=${record}`);
+    logger.debug(`readRecord, sfi='${sfi}', record=${record}`);
     return this.issueCommand(
       new CommandApdu({
         cla: 0x00,
@@ -105,7 +105,7 @@ class Iso7816Application extends EventEmitter {
   }
 
   getData(p1, p2) {
-    //console.log(`Iso7816Application.getData, p1='${p1}', p2=${p2}`);
+    logger.debug(`getData, p1='${p1}', p2=${p2}`);
     return this.issueCommand(
       new CommandApdu({
         cla: 0x00,

@@ -2,11 +2,14 @@
 
 import Card from './Card';
 import { EventEmitter } from 'events';
+import pino from 'pino';
+
+const logger = pino({ name: 'Device' });
 
 class Device extends EventEmitter {
   constructor(reader) {
     super();
-    //console.log(`new Device(${reader})`);
+    logger.debug(`new Device(${reader})`);
     this.reader = reader;
     this.name = reader.name;
     this.card = null;
@@ -49,7 +52,7 @@ class Device extends EventEmitter {
     };
 
     reader.on('status', (status) => {
-      var changes = reader.state ^ status.state;
+      const changes = reader.state ^ status.state;
       if (changes) {
         if (isCardRemoved(changes, reader, status)) {
           cardRemoved(reader);
@@ -61,7 +64,11 @@ class Device extends EventEmitter {
   }
 
   transmit(data, res_len, protocol, cb) {
-    this.reader.transmit(data, res_len, protocol, cb);
+    try {
+      this.reader.transmit(data, res_len, protocol, cb);
+    } catch (err) {
+      logger.warn(`transmit`, err);
+    }
   }
 
   getName() {

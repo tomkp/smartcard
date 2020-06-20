@@ -1,13 +1,16 @@
 'use strict';
 
+import pino from 'pino';
+
 const pcsclite = require('pcsclite');
 import { EventEmitter } from 'events';
 import Device from './Device';
+const logger = pino({ name: 'Devices' });
 
 class Devices extends EventEmitter {
   constructor() {
     super();
-    //console.log(`new Devices()`);
+    logger.debug(`new Devices()`);
     this.pcsc = pcsclite();
     this.devices = {};
 

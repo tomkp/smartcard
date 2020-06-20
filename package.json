@@ -29,7 +29,8 @@
   },
   "dependencies": {
     "hexify": "^1.0.1",
-    "pcsclite": "^1.0.0"
+    "pcsclite": "^1.0.0",
+    "pino": "^6.3.2"
   },
   "devDependencies": {
     "babel-cli": "^6.26.0",
