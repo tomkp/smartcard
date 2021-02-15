@@ -28,7 +28,7 @@
     "prettier": "prettier --write \"{src,demo}/**/*.{js,ts}\""
   },
   "dependencies": {
-    "hexify": "^1.0.1",
+    "hexify": "^1.0.4",
     "pcsclite": "^1.0.0",
     "pino": "^6.11.1"
   },

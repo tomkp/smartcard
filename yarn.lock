@@ -983,10 +983,10 @@ has-values@^1.0.0:
     is-number "^3.0.0"
     kind-of "^4.0.0"
 
-hexify@^1.0.1:
-  version "1.0.1"
-  resolved "https://registry.yarnpkg.com/hexify/-/hexify-1.0.1.tgz#543ce171628769c21138092764ad8d904b69f2e1"
-  integrity sha1-VDzhcWKHacIROAknZK2NkEtp8uE=
+hexify@^1.0.4:
+  version "1.0.4"
+  resolved "https://registry.yarnpkg.com/hexify/-/hexify-1.0.4.tgz#731c09425690b1e788d180a0f884395f772aebf0"
+  integrity sha512-MlomXO1y3bUmMCOmz5EXf2qIjmgCs+sW6/HsBxXpXu8lsqH3aXHt78MHwdfe/esdNU5ai2/5KIpEI6KEUKAQ0g==
 
 home-or-tmp@^2.0.0:
   version "2.0.0"
