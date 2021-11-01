@@ -3,9 +3,7 @@
 
 Smartcard library.
 
-This is a simple wrapper around [Santiago Gimeno's](https://www.npmjs.org/~sgimeno) great [pcsclite](https://github.com/santigimeno/node-pcsclite) library.
-
-Used by [Card Spy](http://card-spy.surge.sh)
+This is a fork of the https://github.com/tomkp/smartcard library, created to solve a problem of fixed length of the expected APDU responses.
 
 ## API
 
