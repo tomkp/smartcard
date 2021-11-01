@@ -22,7 +22,8 @@
     "compile": "babel -d lib/ src/",
     "compile:watch": "babel -w -d lib/ src/",
     "release:patch": "npm run compile && npm version patch && git push && npm publish",
-    "prettier": "prettier --write \"{src,demo}/**/*.{js,ts}\""
+    "prettier": "prettier --write \"{src,demo}/**/*.{js,ts}\"",
+    "test": "echo \"No test specified\""
   },
   "dependencies": {
     "@pokusew/pcsclite": "^0.6.0",
