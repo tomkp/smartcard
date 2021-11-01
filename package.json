@@ -2,6 +2,7 @@
   "name": "@oddomir87/smartcard",
   "version": "1.0.3",
   "author": "codeus",
+  "type": "module",
   "keywords": [
     "pcsc",
     "smartcard",
