@@ -1,7 +1,7 @@
 {
-  "name": "smartcard",
-  "version": "1.0.46",
-  "author": "tomkp <tom@tomkp.com>",
+  "name": "@oddomir87/smartcard",
+  "version": "1.0.0",
+  "author": "codeus",
   "keywords": [
     "pcsc",
     "smartcard",
@@ -12,19 +12,16 @@
     "es6"
   ],
   "license": "MIT",
+  "description": "Forked tomkp/smartcard library to increase length of APDU responses",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tomkp/smartcard.git"
+    "url": "https://github.com/milosodalovic/smartcard.git"
   },
-  "bugs": {
-    "url": "https://github.com/tomkp/smartcard/issues"
-  },
-  "homepage": "https://github.com/tomkp/smartcard",
   "main": "lib/index.js",
   "scripts": {
     "compile": "babel -d lib/ src/",
     "compile:watch": "babel -w -d lib/ src/",
-    "release:patch": "npm run compile && npm version patch && git push && yarn publish",
+    "release:patch": "npm run compile && npm version patch && git push && npm publish",
     "prettier": "prettier --write \"{src,demo}/**/*.{js,ts}\""
   },
   "dependencies": {
