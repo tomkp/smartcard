@@ -1,5 +1,19 @@
 # smartcard
 
+```
+╭────────────────────────────────────────╮
+│                                        │
+│   ╭───────────╮                        │
+│   │ ▄▄▄ ▄▄▄▄▄ │                        │
+│   │ ███ ▄▄▄▄▄ │                        │
+│   │ ▀▀▀ ▀▀▀▀▀ │                        │
+│   ╰───────────╯                        │
+│                                        │
+│                          ░░░░░░░░░░░░  │
+│                          ░░░░░░░░░░░░  │
+╰────────────────────────────────────────╯
+```
+
 Stable PC/SC smart card bindings for Node.js.
 
 Works with Node.js 12+ without recompilation. Built on N-API for long-term stability.
