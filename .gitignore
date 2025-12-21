@@ -1,5 +1,29 @@
-/node_modules
-*.iml
+# Dependencies
+node_modules/
+
+# Build artifacts
+build/
+*.node
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
 *.log
-.idea
-/lib
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# Package lock (optional - remove if you want to commit it)
+# package-lock.json
+
+TASKS.md

@@ -1,0 +1,387 @@
+# smartcard
+
+Modern PC/SC (Personal Computer/Smart Card) bindings for Node.js using N-API.
+
+Unlike older NAN-based bindings that break with each Node.js major version, this library uses N-API for ABI stability across Node.js versions 12, 14, 16, 18, 20, 22, 24, and beyond - without recompilation.
+
+## Features
+
+- **ABI Stable**: Works across Node.js versions without recompilation
+- **Async/Promise-based**: Non-blocking card operations
+- **Event-driven API**: High-level `Devices` class with EventEmitter
+- **TypeScript support**: Full type definitions included
+- **Cross-platform**: Windows, macOS, and Linux
+
+## Installation
+
+```bash
+npm install smartcard
+```
+
+### Prerequisites
+
+**macOS**: No additional setup required (uses built-in PCSC.framework)
+
+**Windows**: No additional setup required (uses built-in winscard.dll)
+
+**Linux**:
+```bash
+# Debian/Ubuntu
+sudo apt-get install libpcsclite-dev pcscd
+
+# Fedora/RHEL
+sudo dnf install pcsc-lite-devel pcsc-lite
+
+# Start the PC/SC daemon
+sudo systemctl start pcscd
+```
+
+## Quick Start
+
+### High-Level API (Event-Driven)
+
+```javascript
+const { Devices } = require('smartcard');
+
+const devices = new Devices();
+
+devices.on('reader-attached', (reader) => {
+    console.log(`Reader attached: ${reader.name}`);
+});
+
+devices.on('reader-detached', (reader) => {
+    console.log(`Reader detached: ${reader.name}`);
+});
+
+devices.on('card-inserted', async ({ reader, card }) => {
+    console.log(`Card inserted in ${reader.name}`);
+    console.log(`  ATR: ${card.atr.toString('hex')}`);
+
+    // Send APDU command
+    try {
+        const response = await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+        console.log(`  UID: ${response.slice(0, -2).toString('hex')}`);
+    } catch (err) {
+        console.error('Transmit error:', err.message);
+    }
+});
+
+devices.on('card-removed', ({ reader }) => {
+    console.log(`Card removed from ${reader.name}`);
+});
+
+devices.on('error', (err) => {
+    console.error('Error:', err.message);
+});
+
+// Start monitoring
+devices.start();
+
+// Stop on exit
+process.on('SIGINT', () => {
+    devices.stop();
+    process.exit();
+});
+```
+
+### Low-Level API (Direct PC/SC)
+
+```javascript
+const {
+    Context,
+    SCARD_SHARE_SHARED,
+    SCARD_PROTOCOL_T0,
+    SCARD_PROTOCOL_T1,
+    SCARD_LEAVE_CARD
+} = require('smartcard');
+
+async function main() {
+    // Create PC/SC context
+    const ctx = new Context();
+    console.log('Context valid:', ctx.isValid);
+
+    // List readers
+    const readers = ctx.listReaders();
+    console.log('Readers:', readers.map(r => r.name));
+
+    if (readers.length === 0) {
+        console.log('No readers found');
+        ctx.close();
+        return;
+    }
+
+    const reader = readers[0];
+    console.log(`Using reader: ${reader.name}`);
+    console.log(`  State: ${reader.state}`);
+
+    // Connect to card
+    try {
+        const card = await reader.connect(
+            SCARD_SHARE_SHARED,
+            SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1
+        );
+        console.log(`Connected, protocol: ${card.protocol}`);
+
+        // Get card status
+        const status = card.getStatus();
+        console.log(`  ATR: ${status.atr.toString('hex')}`);
+
+        // Send APDU (Get UID for contactless cards)
+        const response = await card.transmit(Buffer.from([0xFF, 0xCA, 0x00, 0x00, 0x00]));
+        console.log(`  Response: ${response.toString('hex')}`);
+
+        // Disconnect
+        card.disconnect(SCARD_LEAVE_CARD);
+    } catch (err) {
+        console.error('Card error:', err.message);
+    }
+
+    // Close context
+    ctx.close();
+}
+
+main();
+```
+
+### Waiting for Card Changes
+
+```javascript
+const { Context } = require('smartcard');
+
+async function waitForCard() {
+    const ctx = new Context();
+    const readers = ctx.listReaders();
+
+    if (readers.length === 0) {
+        console.log('No readers found');
+        ctx.close();
+        return;
+    }
+
+    console.log('Waiting for card...');
+
+    // Wait for state change (timeout: 30 seconds)
+    const changes = await ctx.waitForChange(readers, 30000);
+
+    if (changes === null) {
+        console.log('Cancelled');
+    } else if (changes.length === 0) {
+        console.log('Timeout');
+    } else {
+        for (const change of changes) {
+            if (change.changed) {
+                console.log(`${change.name}: state changed to ${change.state}`);
+                if (change.atr) {
+                    console.log(`  ATR: ${change.atr.toString('hex')}`);
+                }
+            }
+        }
+    }
+
+    ctx.close();
+}
+
+waitForCard();
+```
+
+## API Reference
+
+### Context
+
+The low-level PC/SC context.
+
+```typescript
+class Context {
+    constructor();
+    readonly isValid: boolean;
+    listReaders(): Reader[];
+    waitForChange(readers?: Reader[], timeout?: number): Promise<ReaderState[] | null>;
+    cancel(): void;
+    close(): void;
+}
+```
+
+### Reader
+
+Represents a smart card reader.
+
+```typescript
+interface Reader {
+    readonly name: string;
+    readonly state: number;
+    readonly atr: Buffer | null;
+    connect(shareMode?: number, protocol?: number): Promise<Card>;
+}
+```
+
+### Card
+
+Represents a connected smart card.
+
+```typescript
+interface Card {
+    readonly protocol: number;
+    readonly connected: boolean;
+    readonly atr: Buffer | null;
+    transmit(command: Buffer | number[]): Promise<Buffer>;
+    control(code: number, data?: Buffer): Promise<Buffer>;
+    getStatus(): { state: number; protocol: number; atr: Buffer };
+    disconnect(disposition?: number): void;
+    reconnect(shareMode?: number, protocol?: number, init?: number): number;
+}
+```
+
+### Devices
+
+High-level event-driven API.
+
+```typescript
+class Devices extends EventEmitter {
+    start(): void;
+    stop(): void;
+    listReaders(): Reader[];
+
+    on(event: 'reader-attached', listener: (reader: Reader) => void): this;
+    on(event: 'reader-detached', listener: (reader: Reader) => void): this;
+    on(event: 'card-inserted', listener: (event: { reader: Reader; card: Card }) => void): this;
+    on(event: 'card-removed', listener: (event: { reader: Reader; card: Card | null }) => void): this;
+    on(event: 'error', listener: (error: Error) => void): this;
+}
+```
+
+### Constants
+
+```javascript
+// Share modes
+SCARD_SHARE_EXCLUSIVE  // Exclusive access
+SCARD_SHARE_SHARED     // Shared access (default)
+SCARD_SHARE_DIRECT     // Direct access to reader
+
+// Protocols
+SCARD_PROTOCOL_T0      // T=0 protocol
+SCARD_PROTOCOL_T1      // T=1 protocol
+SCARD_PROTOCOL_RAW     // Raw protocol
+
+// Disposition (for disconnect)
+SCARD_LEAVE_CARD       // Leave card as-is
+SCARD_RESET_CARD       // Reset the card
+SCARD_UNPOWER_CARD     // Power down the card
+SCARD_EJECT_CARD       // Eject the card
+
+// State flags
+SCARD_STATE_PRESENT    // Card is present
+SCARD_STATE_EMPTY      // No card in reader
+SCARD_STATE_CHANGED    // State has changed
+// ... and more
+```
+
+## Common APDU Commands
+
+```javascript
+// Get UID (for contactless cards via PC/SC pseudo-APDU)
+const GET_UID = [0xFF, 0xCA, 0x00, 0x00, 0x00];
+
+// Select by AID
+const SELECT_AID = [0x00, 0xA4, 0x04, 0x00, /* length */, /* AID bytes */];
+
+// Read binary
+const READ_BINARY = [0x00, 0xB0, /* P1: offset high */, /* P2: offset low */, /* Le */];
+```
+
+## Error Handling
+
+```javascript
+const { PCSCError, CardRemovedError, TimeoutError } = require('smartcard');
+
+try {
+    const response = await card.transmit([0x00, 0xA4, 0x04, 0x00]);
+} catch (err) {
+    if (err instanceof CardRemovedError) {
+        console.log('Card was removed');
+    } else if (err instanceof TimeoutError) {
+        console.log('Operation timed out');
+    } else if (err instanceof PCSCError) {
+        console.log(`PC/SC error: ${err.message} (code: ${err.code})`);
+    } else {
+        throw err;
+    }
+}
+```
+
+## Troubleshooting
+
+### "No readers available"
+- Ensure a PC/SC compatible reader is connected
+- On Linux, ensure `pcscd` service is running: `sudo systemctl status pcscd`
+
+### "PC/SC service not running"
+- Linux: `sudo systemctl start pcscd`
+- Windows: Check "Smart Card" service is running
+
+### "Sharing violation"
+- Another application has exclusive access to the card
+- Close other smart card applications
+
+### Build errors on Linux
+- Install development headers: `sudo apt-get install libpcsclite-dev`
+
+## Migrating from v1.x
+
+Version 2.0 is a complete rewrite using N-API for stability across Node.js versions.
+
+### Breaking Changes
+
+| v1.x | v2.x |
+|------|------|
+| `device-activated` event | `reader-attached` event |
+| `device-deactivated` event | `reader-detached` event |
+| `event.device` | `reader` (passed directly) |
+| `device.on('card-inserted')` | `devices.on('card-inserted')` |
+| `card.issueCommand()` | `card.transmit()` |
+
+### Migration Example
+
+**v1.x:**
+```javascript
+const { Devices } = require('smartcard');
+const devices = new Devices();
+
+devices.on('device-activated', event => {
+    const device = event.device;
+    device.on('card-inserted', event => {
+        const card = event.card;
+        card.issueCommand(new CommandApdu({...}));
+    });
+});
+```
+
+**v2.x:**
+```javascript
+const { Devices } = require('smartcard');
+const devices = new Devices();
+
+devices.on('reader-attached', reader => {
+    console.log('Reader:', reader.name);
+});
+
+devices.on('card-inserted', ({ reader, card }) => {
+    const response = await card.transmit([0x00, 0xA4, 0x04, 0x00]);
+});
+
+devices.start();
+```
+
+### Key Improvements in v2.x
+- Works on Node.js 12, 14, 16, 18, 20, 22, 24+ without recompilation
+- Native N-API bindings (no more NAN compatibility issues)
+- Simpler flat event model
+- Full TypeScript definitions
+- Promise-based async API
+
+## License
+
+MIT
+
+## Related Projects
+
+- [nfc-pcsc](https://www.npmjs.com/package/nfc-pcsc) - NFC library built on smartcard

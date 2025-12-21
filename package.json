@@ -1,41 +1,58 @@
 {
-  "name": "smartcard",
-  "version": "1.0.46",
-  "author": "tomkp <tom@tomkp.com>",
-  "keywords": [
-    "pcsc",
-    "smartcard",
-    "smart-card",
-    "iso7816",
-    "iso-7816",
-    "emv",
-    "es6"
-  ],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/tomkp/smartcard.git"
-  },
-  "bugs": {
-    "url": "https://github.com/tomkp/smartcard/issues"
-  },
-  "homepage": "https://github.com/tomkp/smartcard",
-  "main": "lib/index.js",
-  "scripts": {
-    "compile": "babel -d lib/ src/",
-    "compile:watch": "babel -w -d lib/ src/",
-    "release:patch": "npm run compile && npm version patch && git push && yarn publish",
-    "prettier": "prettier --write \"{src,demo}/**/*.{js,ts}\""
-  },
-  "dependencies": {
-    "@pokusew/pcsclite": "^0.6.0",
-    "hexify": "^1.0.4",
-    "pino": "^6.11.1"
-  },
-  "devDependencies": {
-    "@babel/cli": "^7.12.16",
-    "@babel/core": "^7.12.16",
-    "@babel/preset-env": "^7.12.16",
-    "prettier": "^2.2.1"
-  }
+    "name": "smartcard",
+    "version": "2.0.0",
+    "description": "PC/SC bindings for Node.js using N-API - ABI stable across Node.js versions",
+    "main": "lib/index.js",
+    "types": "lib/index.d.ts",
+    "gypfile": true,
+    "scripts": {
+        "install": "node-gyp rebuild",
+        "build": "node-gyp rebuild",
+        "rebuild": "node-gyp rebuild",
+        "test": "node test/test.js"
+    },
+    "files": [
+        "lib/",
+        "src/",
+        "binding.gyp",
+        "README.md",
+        "LICENSE"
+    ],
+    "dependencies": {
+        "node-addon-api": "^7.0.0"
+    },
+    "devDependencies": {
+        "node-gyp": "^10.0.0"
+    },
+    "engines": {
+        "node": ">=12.0.0"
+    },
+    "os": [
+        "darwin",
+        "linux",
+        "win32"
+    ],
+    "keywords": [
+        "pcsc",
+        "pcsclite",
+        "smartcard",
+        "smart-card",
+        "nfc",
+        "rfid",
+        "contactless",
+        "napi",
+        "node-addon-api",
+        "acr122",
+        "card-reader"
+    ],
+    "author": "Tom KP",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/tomkp/pcsc-lite.git"
+    },
+    "bugs": {
+        "url": "https://github.com/tomkp/pcsc-lite/issues"
+    },
+    "homepage": "https://github.com/tomkp/pcsc-lite#readme"
 }
