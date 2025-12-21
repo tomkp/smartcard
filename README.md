@@ -1,8 +1,84 @@
 # smartcard
 
-Modern PC/SC (Personal Computer/Smart Card) bindings for Node.js using N-API.
+Stable PC/SC smart card bindings for Node.js.
 
-Unlike older NAN-based bindings that break with each Node.js major version, this library uses N-API for ABI stability across Node.js versions 12, 14, 16, 18, 20, 22, 24, and beyond - without recompilation.
+Works with Node.js 12+ without recompilation. Built on N-API for long-term stability.
+
+## Getting Started
+
+### 1. Install the package
+
+```bash
+npm install smartcard
+```
+
+### 2. Platform setup
+
+**macOS/Windows**: Ready to go - no additional setup needed.
+
+**Linux**:
+```bash
+# Install PC/SC libraries
+sudo apt-get install libpcsclite-dev pcscd   # Debian/Ubuntu
+sudo dnf install pcsc-lite-devel pcsc-lite   # Fedora/RHEL
+
+# Start the daemon
+sudo systemctl start pcscd
+```
+
+### 3. Connect a reader and run your first script
+
+```javascript
+const { Devices } = require('smartcard');
+
+const devices = new Devices();
+
+devices.on('card-inserted', async ({ reader, card }) => {
+    console.log(`Card detected in ${reader.name}`);
+    console.log(`ATR: ${card.atr.toString('hex')}`);
+
+    // Get card UID (works with most contactless cards)
+    const response = await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+    console.log(`UID: ${response.slice(0, -2).toString('hex')}`);
+});
+
+devices.on('error', (err) => console.error(err.message));
+
+devices.start();
+```
+
+Run it:
+```bash
+node app.js
+# Tap a card on your reader...
+# Card detected in ACS ACR122U
+# ATR: 3b8f8001804f0ca0000003060300030000000068
+# UID: 04a23b7a
+```
+
+## Recommended Hardware
+
+### Readers
+
+| Reader | Type | Notes |
+|--------|------|-------|
+| **ACR122U** | USB contactless | Affordable, widely available. Great for getting started. |
+| **ACR1252U** | USB dual-interface | Supports both contactless and contact cards. |
+| **SCM SCR35xx** | USB contact | Tested with SCR35xx v2.0. Good for contact smart cards. |
+| **HID Omnikey 5427** | USB contactless | Enterprise-grade, faster reads. |
+| **Identiv uTrust 3700F** | USB contactless | Compact, reliable. |
+
+Any PC/SC compatible reader should work. The library uses standard PC/SC APIs.
+
+### Cards
+
+| Card Type | Interface | Notes |
+|-----------|-----------|-------|
+| MIFARE Classic 1K/4K | Contactless | Most common NFC cards |
+| MIFARE Ultralight / NTAG | Contactless | Stickers, wristbands, keyfobs |
+| MIFARE DESFire | Contactless | Higher security applications |
+| ISO 14443-4 | Contactless | Generic contactless smart cards |
+| ISO 7816 | Contact | Standard contact smart cards (SIM, bank cards, ID cards) |
 
 ## Features
 
@@ -12,31 +88,7 @@ Unlike older NAN-based bindings that break with each Node.js major version, this
 - **TypeScript support**: Full type definitions included
 - **Cross-platform**: Windows, macOS, and Linux
 
-## Installation
-
-```bash
-npm install smartcard
-```
-
-### Prerequisites
-
-**macOS**: No additional setup required (uses built-in PCSC.framework)
-
-**Windows**: No additional setup required (uses built-in winscard.dll)
-
-**Linux**:
-```bash
-# Debian/Ubuntu
-sudo apt-get install libpcsclite-dev pcscd
-
-# Fedora/RHEL
-sudo dnf install pcsc-lite-devel pcsc-lite
-
-# Start the PC/SC daemon
-sudo systemctl start pcscd
-```
-
-## Quick Start
+## More Examples
 
 ### High-Level API (Event-Driven)
 
