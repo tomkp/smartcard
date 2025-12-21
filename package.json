@@ -2,6 +2,16 @@
     "name": "smartcard",
     "version": "2.0.0",
     "description": "PC/SC bindings for Node.js using N-API - ABI stable across Node.js versions",
+    "author": "Tom KP",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/tomkp/smartcard.git"
+    },
+    "bugs": {
+        "url": "https://github.com/tomkp/smartcard/issues"
+    },
+    "homepage": "https://github.com/tomkp/smartcard#readme",
     "main": "lib/index.js",
     "types": "lib/index.d.ts",
     "gypfile": true,
@@ -44,15 +54,5 @@
         "node-addon-api",
         "acr122",
         "card-reader"
-    ],
-    "author": "Tom KP",
-    "license": "MIT",
-    "repository": {
-        "type": "git",
-        "url": "git+https://github.com/tomkp/pcsc-lite.git"
-    },
-    "bugs": {
-        "url": "https://github.com/tomkp/pcsc-lite/issues"
-    },
-    "homepage": "https://github.com/tomkp/pcsc-lite#readme"
+    ]
 }

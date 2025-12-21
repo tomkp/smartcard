@@ -1,6 +1,6 @@
 # Examples
 
-Ready-to-run examples for pcsclite-napi.
+Ready-to-run examples for smartcard.
 
 ## Prerequisites
 

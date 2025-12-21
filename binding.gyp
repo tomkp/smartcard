@@ -1,6 +1,6 @@
 {
     "targets": [{
-        "target_name": "pcsclite_napi",
+        "target_name": "smartcard_napi",
         "cflags!": ["-fno-exceptions"],
         "cflags_cc!": ["-fno-exceptions"],
         "sources": [

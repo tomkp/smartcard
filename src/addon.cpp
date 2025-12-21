@@ -51,4 +51,4 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     return exports;
 }
 
-NODE_API_MODULE(pcsclite_napi, Init)
+NODE_API_MODULE(smartcard_napi, Init)
