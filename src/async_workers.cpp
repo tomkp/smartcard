@@ -84,6 +84,7 @@ TransmitWorker::TransmitWorker(
     SCARDHANDLE card,
     DWORD protocol,
     std::vector<uint8_t> sendBuffer,
+    size_t maxRecvLength,
     Napi::Promise::Deferred deferred)
     : Napi::AsyncWorker(env),
       card_(card),
@@ -92,8 +93,16 @@ TransmitWorker::TransmitWorker(
       recvLength_(0),
       result_(SCARD_S_SUCCESS),
       deferred_(deferred) {
-    // Pre-allocate receive buffer (max APDU response size)
-    recvBuffer_.resize(258);
+    // Pre-allocate receive buffer with configurable size
+    // Default is 258 (standard APDU: 256 data + 2 status bytes)
+    // Max is 262144 (256KB) for extended APDUs
+    size_t bufferSize = maxRecvLength;
+    if (bufferSize == 0) {
+        bufferSize = 258;  // Default
+    } else if (bufferSize > 262144) {
+        bufferSize = 262144;  // Cap at 256KB
+    }
+    recvBuffer_.resize(bufferSize);
 }
 
 void TransmitWorker::Execute() {

@@ -35,6 +35,7 @@ public:
                    SCARDHANDLE card,
                    DWORD protocol,
                    std::vector<uint8_t> sendBuffer,
+                   size_t maxRecvLength,
                    Napi::Promise::Deferred deferred);
 
     void Execute() override;

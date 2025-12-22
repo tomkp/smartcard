@@ -42,12 +42,17 @@ class MockCard {
 
     /**
      * @param {Buffer|number[]} command
+     * @param {Object} [options]
+     * @param {number} [options.maxRecvLength]
      * @returns {Promise<Buffer>}
      */
-    async transmit(command) {
+    async transmit(command, options = {}) {
         if (!this._connected) {
             throw new Error('Card is not connected');
         }
+
+        // Store options for testing
+        this._lastTransmitOptions = options;
 
         const cmdBuffer = Buffer.isBuffer(command) ? command : Buffer.from(command);
 
