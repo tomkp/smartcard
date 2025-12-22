@@ -360,6 +360,94 @@ console.log('\nReader Tests (hardware dependent):');
     });
 
     // ============================================================================
+    // Test for issue #34: T=0 protocol fallback
+    // ============================================================================
+
+    console.log('\nProtocol Fallback Tests (Issue #34):');
+
+    // Test for issue #34: should fallback to T=0 if T=0|T=1 fails
+    await testAsync('should fallback to T=0 protocol if dual protocol fails', async () => {
+        // First, check if there are any readers with cards
+        const checkCtx = new Context();
+        let readersWithCards = [];
+        try {
+            const readers = checkCtx.listReaders();
+            for (const reader of readers) {
+                if ((reader.state & SCARD_STATE_PRESENT) !== 0) {
+                    readersWithCards.push(reader);
+                }
+            }
+        } catch (err) {
+            // No readers available
+        } finally {
+            checkCtx.close();
+        }
+
+        if (readersWithCards.length === 0) {
+            console.log('      [SKIP] No readers with cards - cannot test protocol fallback');
+            return;
+        }
+
+        console.log(`      Testing protocol fallback behavior with ${readersWithCards.length} reader(s)`);
+
+        const devices = new Devices();
+        const cardInsertedEvents = [];
+        const errors = [];
+
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                devices.stop();
+
+                // Check for unresponsive card errors that would indicate fallback is needed
+                const unresponsiveErrors = errors.filter(err =>
+                    err.message.toLowerCase().includes('unresponsive')
+                );
+
+                if (unresponsiveErrors.length > 0) {
+                    // This test FAILS if we get unresponsive errors - fallback should have prevented this
+                    reject(new Error(
+                        `Got ${unresponsiveErrors.length} unresponsive card error(s). ` +
+                        `Devices should fallback to T=0 protocol when T=0|T=1 fails. (Issue #34)`
+                    ));
+                    return;
+                }
+
+                // Success - either card connected with dual protocol or fallback worked
+                if (cardInsertedEvents.length > 0) {
+                    console.log(`      Successfully connected to ${cardInsertedEvents.length} card(s)`);
+                    for (const { card } of cardInsertedEvents) {
+                        const protocol = card.protocol === SCARD_PROTOCOL_T0 ? 'T=0' : 'T=1';
+                        console.log(`        Protocol used: ${protocol}`);
+                    }
+                    resolve();
+                } else {
+                    // No cards inserted but also no unresponsive errors - could be other errors
+                    console.log(`      [SKIP] Could not connect to cards (non-unresponsive errors)`);
+                    resolve();
+                }
+            }, 2000);
+
+            devices.on('error', (err) => {
+                errors.push(err);
+                const expectedErrors = ['No readers', 'service', 'Sharing violation'];
+                const isExpected = expectedErrors.some(msg =>
+                    err.message.toLowerCase().includes(msg.toLowerCase())
+                );
+                if (!isExpected) {
+                    console.log(`      Error: ${err.message}`);
+                }
+            });
+
+            devices.on('card-inserted', ({ reader, card }) => {
+                console.log(`      card-inserted: ${reader.name}`);
+                cardInsertedEvents.push({ reader, card });
+            });
+
+            devices.start();
+        });
+    });
+
+    // ============================================================================
     // Summary
     // ============================================================================
 
