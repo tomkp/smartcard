@@ -1,6 +1,6 @@
 {
     "name": "smartcard",
-    "version": "2.3.0",
+    "version": "3.0.0",
     "description": "PC/SC bindings for Node.js using N-API - ABI stable across Node.js versions",
     "author": "Tom KP",
     "license": "MIT",
