@@ -136,6 +136,14 @@ void ReaderMonitor::MonitorLoop() {
     // Get initial reader list
     UpdateReaderList();
 
+    // Emit reader-attached events for all pre-existing readers (Issue #30)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& reader : readers_) {
+            EmitEvent("reader-attached", reader.name, reader.lastState, reader.atr);
+        }
+    }
+
     // Build initial states array with PnP notification
     std::vector<SCARD_READERSTATE> states;
     std::vector<std::string> readerNames;
