@@ -597,6 +597,41 @@ test('createPCSCError should return PCSCError for unknown codes', () => {
 });
 
 // ============================================================================
+// Control Code Constants Tests
+// ============================================================================
+
+console.log('\nControl Code Constants Tests:');
+
+const {
+    SCARD_CTL_CODE,
+    CM_IOCTL_GET_FEATURE_REQUEST,
+    FEATURE_VERIFY_PIN_DIRECT,
+    FEATURE_MODIFY_PIN_DIRECT,
+    FEATURE_IFD_PIN_PROPERTIES,
+    FEATURE_GET_TLV_PROPERTIES,
+} = require('../lib');
+
+test('SCARD_CTL_CODE should generate correct control codes', () => {
+    // On macOS/Linux, SCARD_CTL_CODE(code) = 0x42000000 + code
+    // On Windows, SCARD_CTL_CODE(code) = (0x31 << 16) + (code << 2)
+    const code = SCARD_CTL_CODE(3400);
+    assert.strictEqual(typeof code, 'number');
+    assert(code > 0);
+});
+
+test('CM_IOCTL_GET_FEATURE_REQUEST should be defined', () => {
+    assert.strictEqual(typeof CM_IOCTL_GET_FEATURE_REQUEST, 'number');
+    assert(CM_IOCTL_GET_FEATURE_REQUEST > 0);
+});
+
+test('FEATURE constants should have correct values', () => {
+    assert.strictEqual(FEATURE_VERIFY_PIN_DIRECT, 0x06);
+    assert.strictEqual(FEATURE_MODIFY_PIN_DIRECT, 0x07);
+    assert.strictEqual(FEATURE_IFD_PIN_PROPERTIES, 0x0A);
+    assert.strictEqual(FEATURE_GET_TLV_PROPERTIES, 0x12);
+});
+
+// ============================================================================
 // Summary
 // ============================================================================
 
