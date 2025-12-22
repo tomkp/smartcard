@@ -19,7 +19,9 @@
         "install": "node-gyp rebuild",
         "build": "node-gyp rebuild",
         "rebuild": "node-gyp rebuild",
-        "test": "node test/test.js"
+        "test": "node test/test.js && node test/unit.js",
+        "test:unit": "node test/unit.js",
+        "test:integration": "node test/test.js"
     },
     "files": [
         "lib/",
