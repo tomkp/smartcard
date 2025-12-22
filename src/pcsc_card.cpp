@@ -244,14 +244,12 @@ Napi::Value PCSCCard::Reconnect(const Napi::CallbackInfo& info) {
         initialization = info[2].As<Napi::Number>().Uint32Value();
     }
 
-    DWORD activeProtocol = 0;
-    LONG result = SCardReconnect(card_, shareMode, preferredProtocols, initialization, &activeProtocol);
+    // Create promise for async reconnect
+    Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
-    if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
-        return env.Null();
-    }
+    ReconnectWorker* worker = new ReconnectWorker(
+        env, card_, shareMode, preferredProtocols, initialization, deferred);
+    worker->Queue();
 
-    protocol_ = activeProtocol;
-    return Napi::Number::New(env, activeProtocol);
+    return deferred.Promise();
 }

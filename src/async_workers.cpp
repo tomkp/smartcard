@@ -241,3 +241,48 @@ void ConnectWorker::OnOK() {
 void ConnectWorker::OnError(const Napi::Error& error) {
     deferred_.Reject(error.Value());
 }
+
+// ============================================================================
+// ReconnectWorker
+// ============================================================================
+
+ReconnectWorker::ReconnectWorker(
+    Napi::Env env,
+    SCARDHANDLE card,
+    DWORD shareMode,
+    DWORD preferredProtocols,
+    DWORD initialization,
+    Napi::Promise::Deferred deferred)
+    : Napi::AsyncWorker(env),
+      card_(card),
+      shareMode_(shareMode),
+      preferredProtocols_(preferredProtocols),
+      initialization_(initialization),
+      activeProtocol_(0),
+      result_(SCARD_S_SUCCESS),
+      deferred_(deferred) {
+}
+
+void ReconnectWorker::Execute() {
+    result_ = SCardReconnect(
+        card_,
+        shareMode_,
+        preferredProtocols_,
+        initialization_,
+        &activeProtocol_
+    );
+}
+
+void ReconnectWorker::OnOK() {
+    Napi::Env env = Env();
+
+    if (result_ == SCARD_S_SUCCESS) {
+        deferred_.Resolve(Napi::Number::New(env, activeProtocol_));
+    } else {
+        deferred_.Reject(Napi::Error::New(env, GetPCSCErrorString(result_)).Value());
+    }
+}
+
+void ReconnectWorker::OnError(const Napi::Error& error) {
+    deferred_.Reject(error.Value());
+}
