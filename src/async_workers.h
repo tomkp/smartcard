@@ -99,3 +99,29 @@ private:
     LONG result_;
     Napi::Promise::Deferred deferred_;
 };
+
+// Async worker for SCardReconnect
+class ReconnectWorker : public Napi::AsyncWorker {
+public:
+    ReconnectWorker(Napi::Env env,
+                    SCARDHANDLE card,
+                    DWORD shareMode,
+                    DWORD preferredProtocols,
+                    DWORD initialization,
+                    Napi::Promise::Deferred deferred);
+
+    void Execute() override;
+    void OnOK() override;
+    void OnError(const Napi::Error& error) override;
+
+    DWORD GetActiveProtocol() const { return activeProtocol_; }
+
+private:
+    SCARDHANDLE card_;
+    DWORD shareMode_;
+    DWORD preferredProtocols_;
+    DWORD initialization_;
+    DWORD activeProtocol_;
+    LONG result_;
+    Napi::Promise::Deferred deferred_;
+};

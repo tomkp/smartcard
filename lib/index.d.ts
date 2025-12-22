@@ -73,13 +73,13 @@ export interface Card {
     disconnect(disposition?: number): void;
 
     /**
-     * Reconnect to the card
+     * Reconnect to the card (async)
      * @param shareMode - Share mode
      * @param protocol - Preferred protocol(s)
      * @param initialization - Initialization action
-     * @returns The new active protocol
+     * @returns Promise resolving to the new active protocol
      */
-    reconnect(shareMode?: number, protocol?: number, initialization?: number): number;
+    reconnect(shareMode?: number, protocol?: number, initialization?: number): Promise<number>;
 }
 
 /**

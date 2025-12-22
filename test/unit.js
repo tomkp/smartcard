@@ -103,12 +103,12 @@ test('should get card status', () => {
     assert.strictEqual(typeof status.state, 'number');
 });
 
-test('should reconnect card', () => {
+await testAsync('should reconnect card async', async () => {
     const card = new MockCard(1, Buffer.from([0x3B]));
     card.disconnect();
     assert.strictEqual(card.connected, false);
 
-    const protocol = card.reconnect();
+    const protocol = await card.reconnect();
     assert.strictEqual(card.connected, true);
     assert.strictEqual(protocol, 1);
 });

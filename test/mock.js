@@ -99,8 +99,9 @@ class MockCard {
      * @param {number} [shareMode]
      * @param {number} [protocol]
      * @param {number} [init]
+     * @returns {Promise<number>}
      */
-    reconnect(shareMode, protocol, init) {
+    async reconnect(shareMode, protocol, init) {
         this._connected = true;
         return this.protocol;
     }
