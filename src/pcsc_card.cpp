@@ -111,11 +111,20 @@ Napi::Value PCSCCard::Transmit(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 
+    // Parse options (optional second argument)
+    size_t maxRecvLength = 0;  // 0 means use default
+    if (info.Length() > 1 && info[1].IsObject()) {
+        Napi::Object options = info[1].As<Napi::Object>();
+        if (options.Has("maxRecvLength") && options.Get("maxRecvLength").IsNumber()) {
+            maxRecvLength = options.Get("maxRecvLength").As<Napi::Number>().Uint32Value();
+        }
+    }
+
     // Create promise for async transmit
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     TransmitWorker* worker = new TransmitWorker(
-        env, card_, protocol_, sendBuffer, deferred);
+        env, card_, protocol_, sendBuffer, maxRecvLength, deferred);
     worker->Queue();
 
     return deferred.Promise();

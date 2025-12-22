@@ -22,6 +22,18 @@ export interface CardStatus {
 }
 
 /**
+ * Options for card.transmit()
+ */
+export interface TransmitOptions {
+    /**
+     * Maximum receive buffer size in bytes.
+     * Default: 258 (standard APDU: 256 data + 2 status bytes)
+     * Maximum: 262144 (256KB for extended APDUs)
+     */
+    maxRecvLength?: number;
+}
+
+/**
  * Represents a connected smart card
  */
 export interface Card {
@@ -35,9 +47,10 @@ export interface Card {
     /**
      * Transmit an APDU command to the card
      * @param command - The command buffer or byte array
+     * @param options - Optional transmit options
      * @returns Promise resolving to the response buffer
      */
-    transmit(command: Buffer | number[]): Promise<Buffer>;
+    transmit(command: Buffer | number[], options?: TransmitOptions): Promise<Buffer>;
 
     /**
      * Send a control command to the reader

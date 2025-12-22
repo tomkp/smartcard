@@ -113,6 +113,18 @@ test('should reconnect card', () => {
     assert.strictEqual(protocol, 1);
 });
 
+await testAsync('should accept maxRecvLength option in transmit', async () => {
+    const card = new MockCard(1, Buffer.from([0x3B]));
+    await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00], { maxRecvLength: 65536 });
+    assert.strictEqual(card._lastTransmitOptions.maxRecvLength, 65536);
+});
+
+await testAsync('should use default options when none provided', async () => {
+    const card = new MockCard(1, Buffer.from([0x3B]));
+    await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+    assert.deepStrictEqual(card._lastTransmitOptions, {});
+});
+
 // ============================================================================
 // MockReader Tests
 // ============================================================================
