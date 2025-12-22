@@ -289,11 +289,11 @@ interface Card {
     readonly protocol: number;
     readonly connected: boolean;
     readonly atr: Buffer | null;
-    transmit(command: Buffer | number[]): Promise<Buffer>;
+    transmit(command: Buffer | number[], options?: { maxRecvLength?: number }): Promise<Buffer>;
     control(code: number, data?: Buffer): Promise<Buffer>;
     getStatus(): { state: number; protocol: number; atr: Buffer };
     disconnect(disposition?: number): void;
-    reconnect(shareMode?: number, protocol?: number, init?: number): number;
+    reconnect(shareMode?: number, protocol?: number, init?: number): Promise<number>;
 }
 ```
 
