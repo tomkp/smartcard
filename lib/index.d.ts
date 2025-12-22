@@ -216,6 +216,32 @@ export declare class TimeoutError extends PCSCError {
     constructor(message?: string);
 }
 
+/**
+ * Error thrown when no readers are available
+ */
+export declare class NoReadersError extends PCSCError {
+    constructor(message?: string);
+}
+
+/**
+ * Error thrown when PC/SC service is not running
+ */
+export declare class ServiceNotRunningError extends PCSCError {
+    constructor(message?: string);
+}
+
+/**
+ * Error thrown when there's a sharing violation
+ */
+export declare class SharingViolationError extends PCSCError {
+    constructor(message?: string);
+}
+
+/**
+ * Factory function to create the appropriate error class based on PC/SC error code
+ */
+export declare function createPCSCError(message: string, code: number): PCSCError;
+
 // Share modes
 export declare const SCARD_SHARE_EXCLUSIVE: number;
 export declare const SCARD_SHARE_SHARED: number;
