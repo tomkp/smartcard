@@ -232,6 +232,89 @@ console.log('\nReader Tests (hardware dependent):');
         });
     });
 
+    // Test for issue #32: race condition when multiple readers have cards present
+    await testAsync('should emit card-inserted for all readers without race condition', async () => {
+        // First, check if there are multiple readers with cards
+        const checkCtx = new Context();
+        let readersWithCards = [];
+        try {
+            const readers = checkCtx.listReaders();
+            for (const reader of readers) {
+                if ((reader.state & SCARD_STATE_PRESENT) !== 0) {
+                    readersWithCards.push(reader);
+                }
+            }
+        } catch (err) {
+            // No readers available
+        } finally {
+            checkCtx.close();
+        }
+
+        if (readersWithCards.length < 2) {
+            console.log('      [SKIP] Need at least 2 readers with cards to test race condition');
+            return;
+        }
+
+        console.log(`      Found ${readersWithCards.length} readers with cards`);
+
+        const devices = new Devices();
+        const cardInsertedEvents = [];
+        const errors = [];
+
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                devices.stop();
+
+                // Check for race condition errors (SCARD_W_UNRESPONSIVE_CARD)
+                const raceErrors = errors.filter(err =>
+                    err.message.toLowerCase().includes('unresponsive')
+                );
+
+                if (raceErrors.length > 0) {
+                    reject(new Error(
+                        `Race condition detected! Got ${raceErrors.length} unresponsive card error(s). ` +
+                        `This indicates concurrent access to readers. (Issue #32)`
+                    ));
+                    return;
+                }
+
+                // Verify we received card-inserted events for all readers with cards
+                if (cardInsertedEvents.length === readersWithCards.length) {
+                    console.log(`      Received card-inserted for all ${cardInsertedEvents.length} reader(s)`);
+                    resolve();
+                } else {
+                    reject(new Error(
+                        `Expected ${readersWithCards.length} card-inserted events but received ${cardInsertedEvents.length}. ` +
+                        `Race condition may have caused some events to fail. (Issue #32)`
+                    ));
+                }
+            }, 2000);
+
+            devices.on('error', (err) => {
+                errors.push(err);
+                // Don't reject immediately - collect all errors and check at the end
+                const expectedErrors = ['No readers', 'service', 'Sharing violation'];
+                const isExpected = expectedErrors.some(msg =>
+                    err.message.toLowerCase().includes(msg.toLowerCase())
+                );
+                if (!isExpected) {
+                    console.log(`      Error: ${err.message}`);
+                }
+            });
+
+            devices.on('reader-attached', (reader) => {
+                console.log(`      reader-attached: ${reader.name}`);
+            });
+
+            devices.on('card-inserted', ({ reader, card }) => {
+                console.log(`      card-inserted: ${reader.name}`);
+                cardInsertedEvents.push({ reader, card });
+            });
+
+            devices.start();
+        });
+    });
+
     await testAsync('should start and stop monitoring', async () => {
         const devices = new Devices();
 
