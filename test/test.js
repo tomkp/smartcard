@@ -171,6 +171,67 @@ console.log('\nReader Tests (hardware dependent):');
         assert(devices, 'Should create Devices instance');
     });
 
+    // Test for issue #30: pre-existing readers should emit reader-attached on start()
+    await testAsync('should emit reader-attached for pre-existing readers on start', async () => {
+        // First, check if there are any readers using Context
+        const checkCtx = new Context();
+        let existingReaders = [];
+        try {
+            existingReaders = checkCtx.listReaders();
+        } catch (err) {
+            // No readers available
+        } finally {
+            checkCtx.close();
+        }
+
+        if (existingReaders.length === 0) {
+            console.log('      [SKIP] No readers connected - cannot test pre-existing reader detection');
+            return;
+        }
+
+        console.log(`      Found ${existingReaders.length} pre-existing reader(s)`);
+
+        const devices = new Devices();
+        const attachedReaders = [];
+
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                devices.stop();
+                // Verify we received reader-attached events for all pre-existing readers
+                if (attachedReaders.length === existingReaders.length) {
+                    console.log(`      Received reader-attached for all ${attachedReaders.length} pre-existing reader(s)`);
+                    resolve();
+                } else {
+                    reject(new Error(
+                        `Expected ${existingReaders.length} reader-attached events but received ${attachedReaders.length}. ` +
+                        `Pre-existing readers not detected on start(). (Issue #30)`
+                    ));
+                }
+            }, 1000);
+
+            devices.on('error', (err) => {
+                // Ignore expected errors
+                const expectedErrors = ['No readers', 'service', 'unresponsive', 'Sharing violation'];
+                const isExpected = expectedErrors.some(msg =>
+                    err.message.toLowerCase().includes(msg.toLowerCase())
+                );
+                if (!isExpected) {
+                    clearTimeout(timeout);
+                    devices.stop();
+                    reject(err);
+                }
+            });
+
+            devices.on('reader-attached', (reader) => {
+                console.log(`      reader-attached: ${reader.name}`);
+                attachedReaders.push(reader);
+            });
+
+            // Start monitoring - should immediately emit reader-attached for existing readers
+            devices.start();
+        });
+    });
+
     await testAsync('should start and stop monitoring', async () => {
         const devices = new Devices();
 
