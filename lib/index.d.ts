@@ -284,3 +284,42 @@ export declare const SCARD_STATE_ATRMATCH: number;
 export declare const SCARD_STATE_EXCLUSIVE: number;
 export declare const SCARD_STATE_INUSE: number;
 export declare const SCARD_STATE_MUTE: number;
+
+// Control code generator
+/**
+ * Generate a platform-specific control code
+ * @param code - The control code number
+ * @returns The platform-specific control code
+ */
+export declare function SCARD_CTL_CODE(code: number): number;
+
+// Common control codes
+export declare const CM_IOCTL_GET_FEATURE_REQUEST: number;
+
+// CCID Feature tags
+export declare const FEATURE_VERIFY_PIN_START: number;
+export declare const FEATURE_VERIFY_PIN_FINISH: number;
+export declare const FEATURE_MODIFY_PIN_START: number;
+export declare const FEATURE_MODIFY_PIN_FINISH: number;
+export declare const FEATURE_GET_KEY_PRESSED: number;
+export declare const FEATURE_VERIFY_PIN_DIRECT: number;
+export declare const FEATURE_MODIFY_PIN_DIRECT: number;
+export declare const FEATURE_MCT_READER_DIRECT: number;
+export declare const FEATURE_MCT_UNIVERSAL: number;
+export declare const FEATURE_IFD_PIN_PROPERTIES: number;
+export declare const FEATURE_ABORT: number;
+export declare const FEATURE_SET_SPE_MESSAGE: number;
+export declare const FEATURE_VERIFY_PIN_DIRECT_APP_ID: number;
+export declare const FEATURE_MODIFY_PIN_DIRECT_APP_ID: number;
+export declare const FEATURE_WRITE_DISPLAY: number;
+export declare const FEATURE_GET_KEY: number;
+export declare const FEATURE_IFD_DISPLAY_PROPERTIES: number;
+export declare const FEATURE_GET_TLV_PROPERTIES: number;
+export declare const FEATURE_CCID_ESC_COMMAND: number;
+
+/**
+ * Parse feature TLV response from CM_IOCTL_GET_FEATURE_REQUEST
+ * @param response - The TLV response buffer
+ * @returns Map of feature tag to control code
+ */
+export declare function parseFeatures(response: Buffer): Map<number, number>;
