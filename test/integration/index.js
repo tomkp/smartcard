@@ -10,7 +10,7 @@ const {
     SCARD_STATE_PRESENT,
     SCARD_STATE_EMPTY,
     SCARD_LEAVE_CARD,
-} = require('../lib');
+} = require('../../lib');
 
 // Test results
 let passed = 0;
