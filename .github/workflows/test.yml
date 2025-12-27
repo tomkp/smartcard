@@ -9,9 +9,6 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
-    # Windows builds have a pre-existing compilation issue (MAX_ATR_SIZE undeclared)
-    # Allow Windows to fail until that's fixed
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:

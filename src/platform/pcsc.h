@@ -32,5 +32,10 @@
     #endif
 #endif
 
+// MAX_ATR_SIZE may not be defined on some Windows SDK versions
+#ifndef MAX_ATR_SIZE
+    #define MAX_ATR_SIZE 33
+#endif
+
 // Helper macro for unused parameters
 #define PCSC_UNUSED(x) (void)(x)
