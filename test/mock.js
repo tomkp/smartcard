@@ -116,6 +116,7 @@ class MockReader {
         this.name = name;
         this._card = card;
         this._state = card ? 0x122 : 0x12; // PRESENT or EMPTY
+        this._connectAttempts = 0;
     }
 
     get state() {
@@ -127,11 +128,19 @@ class MockReader {
     }
 
     /**
+     * Get the number of connect attempts (useful for testing fallback)
+     */
+    get connectAttempts() {
+        return this._connectAttempts;
+    }
+
+    /**
      * @param {number} [shareMode]
      * @param {number} [protocol]
      * @returns {Promise<MockCard>}
      */
     async connect(shareMode, protocol) {
+        this._connectAttempts++;
         if (!this._card) {
             throw new Error('No card in reader');
         }
@@ -426,7 +435,19 @@ function createMockDevices(mockAddon) {
                 const readers = this._context.listReaders();
                 const reader = readers.find(r => r.name === readerName);
                 if (reader) {
-                    const card = await reader.connect(SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1);
+                    let card;
+                    try {
+                        // First try with both T=0 and T=1 protocols
+                        card = await reader.connect(SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1);
+                    } catch (dualProtocolErr) {
+                        // If dual protocol fails with "unresponsive", fallback to T=0 only (issue #34)
+                        if (dualProtocolErr.message &&
+                            dualProtocolErr.message.toLowerCase().includes('unresponsive')) {
+                            card = await reader.connect(SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0);
+                        } else {
+                            throw dualProtocolErr;
+                        }
+                    }
                     state.card = card;
                     this.emit('card-inserted', {
                         reader: { name: readerName, state: eventState, atr },
@@ -457,10 +478,67 @@ function createMockDevices(mockAddon) {
     return MockDevices;
 }
 
+// Protocol constants for testing
+const SCARD_PROTOCOL_T0 = 1;
+const SCARD_PROTOCOL_T1 = 2;
+
+/**
+ * A mock reader that fails with "unresponsive" error on dual protocol (T0|T1)
+ * but succeeds when connecting with T0 only (simulates issue #34 fallback)
+ */
+class UnresponsiveDualProtocolReader extends MockReader {
+    /**
+     * @param {number} [shareMode]
+     * @param {number} [protocol]
+     * @returns {Promise<MockCard>}
+     */
+    async connect(shareMode, protocol) {
+        this._connectAttempts++;
+        if (!this._card) {
+            throw new Error('No card in reader');
+        }
+        // If trying to connect with both protocols, fail with unresponsive
+        if (protocol === (SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1)) {
+            throw new Error('Card is unresponsive');
+        }
+        // T0 only should succeed
+        return this._card;
+    }
+}
+
+/**
+ * A mock reader that always fails to connect with a non-unresponsive error
+ */
+class FailingMockReader extends MockReader {
+    /**
+     * @param {string} name
+     * @param {MockCard|null} card
+     * @param {string} errorMessage - The error message to throw
+     */
+    constructor(name, card = null, errorMessage = 'Connection failed') {
+        super(name, card);
+        this._errorMessage = errorMessage;
+    }
+
+    /**
+     * @param {number} [shareMode]
+     * @param {number} [protocol]
+     * @returns {Promise<MockCard>}
+     */
+    async connect(shareMode, protocol) {
+        this._connectAttempts++;
+        throw new Error(this._errorMessage);
+    }
+}
+
 module.exports = {
     MockCard,
     MockReader,
     MockContext,
     MockReaderMonitor,
     createMockDevices,
+    UnresponsiveDualProtocolReader,
+    FailingMockReader,
+    SCARD_PROTOCOL_T0,
+    SCARD_PROTOCOL_T1,
 };
