@@ -9,6 +9,9 @@ const {
     createMockDevices,
     UnresponsiveDualProtocolReader,
     FailingMockReader,
+    SlowMockReader,
+    IntermittentFailureMockReader,
+    UnstableMockCard,
 } = require('./mock');
 
 // Test results
@@ -606,6 +609,86 @@ await testAsync('should succeed on first try when dual protocol works', async ()
     assert.strictEqual(mockReader.connectAttempts, 1, 'Should only attempt connect once');
 
     devices.stop();
+});
+
+// ============================================================================
+// Enhanced Mock Scenario Tests
+// ============================================================================
+
+console.log('\nEnhanced Mock Scenario Tests:');
+
+await testAsync('SlowMockReader should delay before connecting', async () => {
+    const mockCard = new MockCard(1, Buffer.from([0x3B]));
+    const reader = new SlowMockReader('Test Reader', mockCard, 50);
+
+    const start = Date.now();
+    const card = await reader.connect();
+    const elapsed = Date.now() - start;
+
+    assert(card, 'Should return card');
+    assert(elapsed >= 40, `Should delay at least 40ms, got ${elapsed}ms`);
+    assert.strictEqual(reader.connectAttempts, 1, 'Should record connect attempt');
+});
+
+await testAsync('IntermittentFailureMockReader should fail then succeed', async () => {
+    const mockCard = new MockCard(1, Buffer.from([0x3B]));
+    const reader = new IntermittentFailureMockReader('Test Reader', mockCard, 2, 'Temporary failure');
+
+    // First attempt should fail
+    try {
+        await reader.connect();
+        assert.fail('First attempt should fail');
+    } catch (err) {
+        assert.strictEqual(err.message, 'Temporary failure');
+    }
+
+    // Second attempt should fail
+    try {
+        await reader.connect();
+        assert.fail('Second attempt should fail');
+    } catch (err) {
+        assert.strictEqual(err.message, 'Temporary failure');
+    }
+
+    // Third attempt should succeed
+    const card = await reader.connect();
+    assert(card, 'Third attempt should succeed');
+    assert.strictEqual(reader.connectAttempts, 3, 'Should record all attempts');
+});
+
+await testAsync('UnstableMockCard should fail after N transmits', async () => {
+    const card = new UnstableMockCard(1, Buffer.from([0x3B]), [], 2);
+
+    // First two transmits should succeed
+    await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+    await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+
+    // Third should fail
+    try {
+        await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+        assert.fail('Third transmit should fail');
+    } catch (err) {
+        assert.strictEqual(err.message, 'Card was removed');
+    }
+
+    assert.strictEqual(card.connected, false, 'Card should be disconnected');
+});
+
+await testAsync('MockCard with delay should simulate slow responses', async () => {
+    const card = new MockCard(1, Buffer.from([0x3B]), [], { transmitDelay: 50 });
+
+    const start = Date.now();
+    await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+    const elapsed = Date.now() - start;
+
+    assert(elapsed >= 40, `Should delay at least 40ms, got ${elapsed}ms`);
+    assert.strictEqual(card.transmitCount, 1, 'Should record transmit count');
+});
+
+test('MockCard should track transmit and control counts', () => {
+    const card = new MockCard(1, Buffer.from([0x3B]));
+    assert.strictEqual(card.transmitCount, 0, 'Initial transmit count should be 0');
+    assert.strictEqual(card.controlCount, 0, 'Initial control count should be 0');
 });
 
 // ============================================================================
