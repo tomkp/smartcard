@@ -22,6 +22,7 @@ npm-debug.log*
 
 # Test coverage
 coverage/
+.c8_output/
 
 # Package lock (optional - remove if you want to commit it)
 # package-lock.json
