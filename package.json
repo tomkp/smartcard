@@ -21,7 +21,9 @@
         "rebuild": "node-gyp rebuild",
         "test": "node test/test.js && node test/unit.js",
         "test:unit": "node test/unit.js",
-        "test:integration": "node test/test.js"
+        "test:integration": "node test/test.js",
+        "test:coverage": "c8 --include=lib/**/*.js node test/unit.js",
+        "coverage:report": "c8 report --reporter=text --reporter=html"
     },
     "files": [
         "lib/",
@@ -34,6 +36,7 @@
         "node-addon-api": "^7.0.0"
     },
     "devDependencies": {
+        "c8": "^10.1.3",
         "node-gyp": "^10.0.0"
     },
     "engines": {
