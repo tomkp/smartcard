@@ -24,12 +24,33 @@ class MockCard {
      * @param {number} protocol
      * @param {Buffer} atr
      * @param {MockCardResponse[]} responses
+     * @param {Object} [options]
+     * @param {number} [options.transmitDelay] - Delay in ms before transmit returns
+     * @param {number} [options.controlDelay] - Delay in ms before control returns
      */
-    constructor(protocol, atr, responses = []) {
+    constructor(protocol, atr, responses = [], options = {}) {
         this.protocol = protocol;
         this._atr = atr;
         this._responses = responses;
         this._connected = true;
+        this._transmitDelay = options.transmitDelay || 0;
+        this._controlDelay = options.controlDelay || 0;
+        this._transmitCount = 0;
+        this._controlCount = 0;
+    }
+
+    /**
+     * Get number of transmit calls (for testing)
+     */
+    get transmitCount() {
+        return this._transmitCount;
+    }
+
+    /**
+     * Get number of control calls (for testing)
+     */
+    get controlCount() {
+        return this._controlCount;
     }
 
     get connected() {
@@ -51,8 +72,15 @@ class MockCard {
             throw new Error('Card is not connected');
         }
 
+        this._transmitCount++;
+
         // Store options for testing
         this._lastTransmitOptions = options;
+
+        // Simulate delay if configured
+        if (this._transmitDelay > 0) {
+            await new Promise(resolve => setTimeout(resolve, this._transmitDelay));
+        }
 
         const cmdBuffer = Buffer.isBuffer(command) ? command : Buffer.from(command);
 
@@ -77,6 +105,14 @@ class MockCard {
         if (!this._connected) {
             throw new Error('Card is not connected');
         }
+
+        this._controlCount++;
+
+        // Simulate delay if configured
+        if (this._controlDelay > 0) {
+            await new Promise(resolve => setTimeout(resolve, this._controlDelay));
+        }
+
         return Buffer.from([0x90, 0x00]);
     }
 
@@ -531,6 +567,106 @@ class FailingMockReader extends MockReader {
     }
 }
 
+/**
+ * A mock reader that delays before connecting (for testing timing scenarios)
+ */
+class SlowMockReader extends MockReader {
+    /**
+     * @param {string} name
+     * @param {MockCard|null} card
+     * @param {number} delay - Delay in ms before connect returns
+     */
+    constructor(name, card = null, delay = 100) {
+        super(name, card);
+        this._delay = delay;
+    }
+
+    /**
+     * @param {number} [shareMode]
+     * @param {number} [protocol]
+     * @returns {Promise<MockCard>}
+     */
+    async connect(shareMode, protocol) {
+        this._connectAttempts++;
+        if (!this._card) {
+            throw new Error('No card in reader');
+        }
+        await new Promise(resolve => setTimeout(resolve, this._delay));
+        return this._card;
+    }
+}
+
+/**
+ * A mock reader that fails on the first N connect attempts, then succeeds
+ * Useful for testing retry logic
+ */
+class IntermittentFailureMockReader extends MockReader {
+    /**
+     * @param {string} name
+     * @param {MockCard|null} card
+     * @param {number} failureCount - Number of times to fail before succeeding
+     * @param {string} errorMessage - Error message for failures
+     */
+    constructor(name, card = null, failureCount = 1, errorMessage = 'Temporary failure') {
+        super(name, card);
+        this._failureCount = failureCount;
+        this._errorMessage = errorMessage;
+    }
+
+    /**
+     * @param {number} [shareMode]
+     * @param {number} [protocol]
+     * @returns {Promise<MockCard>}
+     */
+    async connect(shareMode, protocol) {
+        this._connectAttempts++;
+        if (!this._card) {
+            throw new Error('No card in reader');
+        }
+        if (this._connectAttempts <= this._failureCount) {
+            throw new Error(this._errorMessage);
+        }
+        return this._card;
+    }
+}
+
+/**
+ * A mock card that fails transmit after a certain number of commands
+ * Simulates card removal during operation
+ */
+class UnstableMockCard extends MockCard {
+    /**
+     * @param {number} protocol
+     * @param {Buffer} atr
+     * @param {MockCardResponse[]} responses
+     * @param {number} failAfter - Number of successful transmits before failing
+     */
+    constructor(protocol, atr, responses = [], failAfter = 3) {
+        super(protocol, atr, responses);
+        this._failAfter = failAfter;
+    }
+
+    /**
+     * @param {Buffer|number[]} command
+     * @param {Object} [options]
+     * @returns {Promise<Buffer>}
+     */
+    async transmit(command, options = {}) {
+        if (!this._connected) {
+            throw new Error('Card is not connected');
+        }
+
+        // Check before incrementing (parent will increment)
+        if (this._transmitCount >= this._failAfter) {
+            this._transmitCount++;
+            this._connected = false;
+            throw new Error('Card was removed');
+        }
+
+        return super.transmit(command, options);
+    }
+}
+
 module.exports = {
     MockCard,
     MockReader,
@@ -539,6 +675,9 @@ module.exports = {
     createMockDevices,
     UnresponsiveDualProtocolReader,
     FailingMockReader,
+    SlowMockReader,
+    IntermittentFailureMockReader,
+    UnstableMockCard,
     SCARD_PROTOCOL_T0,
     SCARD_PROTOCOL_T1,
 };
