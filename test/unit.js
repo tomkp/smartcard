@@ -7,6 +7,8 @@ const {
     MockContext,
     MockReaderMonitor,
     createMockDevices,
+    UnresponsiveDualProtocolReader,
+    FailingMockReader,
 } = require('./mock');
 
 // Test results
@@ -497,6 +499,111 @@ await testAsync('should emit reader-detached events', async () => {
 
     assert(events.includes('attached'));
     assert(events.includes('detached'));
+
+    devices.stop();
+});
+
+// ============================================================================
+// Protocol Fallback Tests (Issue #34)
+// ============================================================================
+
+console.log('\nProtocol Fallback Tests (Issue #34):');
+
+await testAsync('should fallback to T=0 when dual protocol fails with unresponsive error', async () => {
+    const mockCard = new MockCard(1, Buffer.from([0x3B, 0x8F]));
+    const mockReader = new UnresponsiveDualProtocolReader('Test Reader', mockCard);
+    const mockContext = new MockContext();
+    const mockMonitor = new MockReaderMonitor();
+
+    mockContext.addReader(mockReader);
+    mockMonitor.attachReader(mockReader);
+
+    const MockDevices = createMockDevices({
+        Context: function() { return mockContext; },
+        ReaderMonitor: function() { return mockMonitor; },
+    });
+
+    const devices = new MockDevices();
+    const cardEvents = [];
+    const errors = [];
+
+    devices.on('card-inserted', (event) => cardEvents.push(event));
+    devices.on('error', (err) => errors.push(err));
+
+    devices.start();
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // Should have successfully connected with fallback
+    assert.strictEqual(cardEvents.length, 1, 'Should emit card-inserted event');
+    assert.strictEqual(errors.length, 0, 'Should not emit error');
+    // Should have attempted connect twice (first dual, then T0 fallback)
+    assert.strictEqual(mockReader.connectAttempts, 2, 'Should attempt connect twice (fallback)');
+
+    devices.stop();
+});
+
+await testAsync('should rethrow non-unresponsive errors without fallback', async () => {
+    const mockCard = new MockCard(1, Buffer.from([0x3B, 0x8F]));
+    const mockReader = new FailingMockReader('Test Reader', mockCard, 'Sharing violation');
+    const mockContext = new MockContext();
+    const mockMonitor = new MockReaderMonitor();
+
+    mockContext.addReader(mockReader);
+    mockMonitor.attachReader(mockReader);
+
+    const MockDevices = createMockDevices({
+        Context: function() { return mockContext; },
+        ReaderMonitor: function() { return mockMonitor; },
+    });
+
+    const devices = new MockDevices();
+    const cardEvents = [];
+    const errors = [];
+
+    devices.on('card-inserted', (event) => cardEvents.push(event));
+    devices.on('error', (err) => errors.push(err));
+
+    devices.start();
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // Should have failed and emitted error
+    assert.strictEqual(cardEvents.length, 0, 'Should not emit card-inserted event');
+    assert.strictEqual(errors.length, 1, 'Should emit error');
+    assert(errors[0].message.includes('Sharing violation'), 'Error should contain original message');
+    // Should only attempt once (no fallback for non-unresponsive errors)
+    assert.strictEqual(mockReader.connectAttempts, 1, 'Should only attempt connect once');
+
+    devices.stop();
+});
+
+await testAsync('should succeed on first try when dual protocol works', async () => {
+    const mockCard = new MockCard(1, Buffer.from([0x3B, 0x8F]));
+    const mockReader = new MockReader('Test Reader', mockCard);
+    const mockContext = new MockContext();
+    const mockMonitor = new MockReaderMonitor();
+
+    mockContext.addReader(mockReader);
+    mockMonitor.attachReader(mockReader);
+
+    const MockDevices = createMockDevices({
+        Context: function() { return mockContext; },
+        ReaderMonitor: function() { return mockMonitor; },
+    });
+
+    const devices = new MockDevices();
+    const cardEvents = [];
+    const errors = [];
+
+    devices.on('card-inserted', (event) => cardEvents.push(event));
+    devices.on('error', (err) => errors.push(err));
+
+    devices.start();
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // Should succeed on first try
+    assert.strictEqual(cardEvents.length, 1, 'Should emit card-inserted event');
+    assert.strictEqual(errors.length, 0, 'Should not emit error');
+    assert.strictEqual(mockReader.connectAttempts, 1, 'Should only attempt connect once');
 
     devices.stop();
 });
