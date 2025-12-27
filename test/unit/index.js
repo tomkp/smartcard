@@ -13,7 +13,7 @@ const {
     SlowMockReader,
     IntermittentFailureMockReader,
     UnstableMockCard,
-} = require('./mock');
+} = require('../helpers/mock');
 
 describe('MockCard', () => {
     it('should create a mock card with protocol and ATR', () => {
@@ -620,7 +620,7 @@ describe('Error Classes', () => {
         ServiceNotRunningError,
         SharingViolationError,
         createPCSCError,
-    } = require('../lib/errors');
+    } = require('../../lib/errors');
 
     it('PCSCError should have code property', () => {
         const err = new PCSCError('Test error', 0x80100001);
@@ -710,7 +710,7 @@ describe('Control Code Constants', () => {
         FEATURE_MODIFY_PIN_DIRECT,
         FEATURE_IFD_PIN_PROPERTIES,
         FEATURE_GET_TLV_PROPERTIES,
-    } = require('../lib');
+    } = require('../../lib');
 
     it('SCARD_CTL_CODE should generate correct control codes', () => {
         const code = SCARD_CTL_CODE(3400);
