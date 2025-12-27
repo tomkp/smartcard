@@ -19,10 +19,10 @@
         "install": "node-gyp rebuild",
         "build": "node-gyp rebuild",
         "rebuild": "node-gyp rebuild",
-        "test": "node test/test.js && node test/unit.js",
-        "test:unit": "node test/unit.js",
+        "test": "node test/test.js && node --test test/unit.js",
+        "test:unit": "node --test test/unit.js",
         "test:integration": "node test/test.js",
-        "test:coverage": "c8 --include=lib/**/*.js node test/unit.js",
+        "test:coverage": "c8 --include=lib/**/*.js node --test test/unit.js",
         "test:types": "tsd",
         "coverage:report": "c8 report --reporter=text --reporter=html"
     },
@@ -43,7 +43,7 @@
         "tsd": "^0.33.0"
     },
     "engines": {
-        "node": ">=12.0.0"
+        "node": ">=18.0.0"
     },
     "os": [
         "darwin",
