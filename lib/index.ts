@@ -1,5 +1,4 @@
 // Load native addon
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const addon = require('../../build/Release/smartcard_napi.node') as import('./types').NativeAddon;
 
 // Re-export native classes

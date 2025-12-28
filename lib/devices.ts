@@ -10,7 +10,6 @@ import type {
     ReaderMonitorConstructor,
 } from './types';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const addon = require('../../build/Release/smartcard_napi.node') as {
     Context: ContextConstructor;
     ReaderMonitor: ReaderMonitorConstructor;

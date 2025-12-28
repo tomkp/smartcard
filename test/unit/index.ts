@@ -740,7 +740,6 @@ describe('Error Classes', () => {
         ServiceNotRunningError,
         SharingViolationError,
         createPCSCError,
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
     } = require('../../lib/errors');
 
     it('PCSCError should have code property', () => {
@@ -831,7 +830,6 @@ describe('Control Code Constants', () => {
         FEATURE_MODIFY_PIN_DIRECT,
         FEATURE_IFD_PIN_PROPERTIES,
         FEATURE_GET_TLV_PROPERTIES,
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
     } = require('../../lib');
 
     it('SCARD_CTL_CODE should generate correct control codes', () => {
