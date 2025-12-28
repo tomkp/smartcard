@@ -12,6 +12,7 @@ import {
     IntermittentFailureMockReader,
     UnstableMockCard,
 } from '../helpers/mock';
+import type { Card, ReaderEventInfo } from '../../lib/types';
 
 describe('MockCard', () => {
     it('should create a mock card with protocol and ATR', () => {
@@ -341,11 +342,11 @@ describe('MockDevices Integration', () => {
         });
 
         const devices = new MockDevices();
-        const events: { reader: { name: string }; card: MockCard }[] = [];
+        const events: { reader: ReaderEventInfo; card: Card }[] = [];
 
         devices.on(
             'card-inserted',
-            (event: { reader: { name: string }; card: MockCard }) =>
+            (event: { reader: ReaderEventInfo; card: Card }) =>
                 events.push(event)
         );
 

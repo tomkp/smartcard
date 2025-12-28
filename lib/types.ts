@@ -194,6 +194,24 @@ export interface ReaderMonitorConstructor {
 }
 
 /**
+ * Options for Devices class constructor (for dependency injection)
+ */
+export interface DevicesOptions {
+    /** Custom Context constructor (for testing) */
+    Context?: ContextConstructor;
+    /** Custom ReaderMonitor constructor (for testing) */
+    ReaderMonitor?: ReaderMonitorConstructor;
+    /** SCARD_STATE_PRESENT constant */
+    SCARD_STATE_PRESENT?: number;
+    /** SCARD_SHARE_SHARED constant */
+    SCARD_SHARE_SHARED?: number;
+    /** SCARD_PROTOCOL_T0 constant */
+    SCARD_PROTOCOL_T0?: number;
+    /** SCARD_PROTOCOL_T1 constant */
+    SCARD_PROTOCOL_T1?: number;
+}
+
+/**
  * Native addon interface
  */
 export interface NativeAddon {
