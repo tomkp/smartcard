@@ -252,6 +252,7 @@ ReconnectWorker::ReconnectWorker(
     DWORD shareMode,
     DWORD preferredProtocols,
     DWORD initialization,
+    DWORD* protocolOut,
     Napi::Promise::Deferred deferred)
     : Napi::AsyncWorker(env),
       card_(card),
@@ -259,6 +260,7 @@ ReconnectWorker::ReconnectWorker(
       preferredProtocols_(preferredProtocols),
       initialization_(initialization),
       activeProtocol_(0),
+      protocolOut_(protocolOut),
       result_(SCARD_S_SUCCESS),
       deferred_(deferred) {
 }
@@ -277,6 +279,10 @@ void ReconnectWorker::OnOK() {
     Napi::Env env = Env();
 
     if (result_ == SCARD_S_SUCCESS) {
+        // Update the card object's protocol
+        if (protocolOut_) {
+            *protocolOut_ = activeProtocol_;
+        }
         deferred_.Resolve(Napi::Number::New(env, activeProtocol_));
     } else {
         deferred_.Reject(Napi::Error::New(env, GetPCSCErrorString(result_)).Value());
