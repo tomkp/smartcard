@@ -248,7 +248,7 @@ Napi::Value PCSCCard::Reconnect(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     ReconnectWorker* worker = new ReconnectWorker(
-        env, card_, shareMode, preferredProtocols, initialization, deferred);
+        env, card_, shareMode, preferredProtocols, initialization, &protocol_, deferred);
     worker->Queue();
 
     return deferred.Promise();

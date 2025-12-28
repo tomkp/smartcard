@@ -82,6 +82,22 @@ describe('MockCard', () => {
         assert.strictEqual(protocol, 1);
     });
 
+    it('should update protocol after reconnect with different protocol', async () => {
+        const card = new MockCard(1, Buffer.from([0x3b])); // Start with T=0 (protocol 1)
+        assert.strictEqual(card.protocol, 1);
+
+        // Simulate reconnection with T=1 protocol
+        card.setReconnectProtocol(2);
+        const newProtocol = await card.reconnect();
+
+        assert.strictEqual(newProtocol, 2, 'reconnect should return new protocol');
+        assert.strictEqual(
+            card.protocol,
+            2,
+            'card.protocol should be updated after reconnect'
+        );
+    });
+
     it('should accept maxRecvLength option in transmit', async () => {
         const card = new MockCard(1, Buffer.from([0x3b]));
         await card.transmit([0xff, 0xca, 0x00, 0x00, 0x00], {

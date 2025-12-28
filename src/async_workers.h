@@ -108,6 +108,7 @@ public:
                     DWORD shareMode,
                     DWORD preferredProtocols,
                     DWORD initialization,
+                    DWORD* protocolOut,
                     Napi::Promise::Deferred deferred);
 
     void Execute() override;
@@ -122,6 +123,7 @@ private:
     DWORD preferredProtocols_;
     DWORD initialization_;
     DWORD activeProtocol_;
+    DWORD* protocolOut_;
     LONG result_;
     Napi::Promise::Deferred deferred_;
 };

@@ -24,7 +24,7 @@ interface MockCardOptions {
 }
 
 export class MockCard implements Card {
-    readonly protocol: number;
+    private _protocol: number;
     private _atr: Buffer;
     private _responses: MockCardResponse[];
     private _connected = true;
@@ -32,6 +32,7 @@ export class MockCard implements Card {
     private _controlDelay: number;
     private _transmitCount = 0;
     private _controlCount = 0;
+    private _reconnectProtocol: number | null = null;
     _lastTransmitOptions: TransmitOptions = {};
 
     constructor(
@@ -40,11 +41,22 @@ export class MockCard implements Card {
         responses: MockCardResponse[] = [],
         options: MockCardOptions = {}
     ) {
-        this.protocol = protocol;
+        this._protocol = protocol;
         this._atr = atr;
         this._responses = responses;
         this._transmitDelay = options.transmitDelay || 0;
         this._controlDelay = options.controlDelay || 0;
+    }
+
+    get protocol(): number {
+        return this._protocol;
+    }
+
+    /**
+     * Set the protocol that will be returned on next reconnect
+     */
+    setReconnectProtocol(protocol: number): void {
+        this._reconnectProtocol = protocol;
     }
 
     get transmitCount(): number {
@@ -139,7 +151,12 @@ export class MockCard implements Card {
         _init?: number
     ): Promise<number> {
         this._connected = true;
-        return this.protocol;
+        // If a reconnect protocol was set, use it and update the card's protocol
+        if (this._reconnectProtocol !== null) {
+            this._protocol = this._reconnectProtocol;
+            this._reconnectProtocol = null;
+        }
+        return this._protocol;
     }
 }
 
