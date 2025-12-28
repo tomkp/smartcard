@@ -87,4 +87,5 @@ export type {
     MonitorEvent,
     ReaderMonitor as ReaderMonitorInterface,
     DeviceEvents,
+    DevicesOptions,
 } from './types';

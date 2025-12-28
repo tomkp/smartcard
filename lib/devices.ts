@@ -4,6 +4,7 @@ import type {
     Context,
     ContextConstructor,
     DeviceEvents,
+    DevicesOptions,
     MonitorEvent,
     Reader,
     ReaderMonitor,
@@ -18,12 +19,6 @@ const addon = require('../../build/Release/smartcard_napi.node') as {
     SCARD_PROTOCOL_T0: number;
     SCARD_PROTOCOL_T1: number;
 };
-
-const { Context, ReaderMonitor } = addon;
-const SCARD_STATE_PRESENT = addon.SCARD_STATE_PRESENT;
-const SCARD_SHARE_SHARED = addon.SCARD_SHARE_SHARED;
-const SCARD_PROTOCOL_T0 = addon.SCARD_PROTOCOL_T0;
-const SCARD_PROTOCOL_T1 = addon.SCARD_PROTOCOL_T1;
 
 interface ReaderStateInternal {
     hasCard: boolean;
@@ -50,8 +45,30 @@ export class Devices extends EventEmitter {
     private _readers = new Map<string, ReaderStateInternal>();
     private _eventQueue: Promise<void> = Promise.resolve();
 
-    constructor() {
+    // Dependencies (can be injected for testing)
+    private _Context: ContextConstructor;
+    private _ReaderMonitor: ReaderMonitorConstructor;
+    private _SCARD_STATE_PRESENT: number;
+    private _SCARD_SHARE_SHARED: number;
+    private _SCARD_PROTOCOL_T0: number;
+    private _SCARD_PROTOCOL_T1: number;
+
+    /**
+     * Create a new Devices instance
+     * @param options Optional dependencies for testing
+     */
+    constructor(options?: DevicesOptions) {
         super();
+        this._Context = options?.Context ?? addon.Context;
+        this._ReaderMonitor = options?.ReaderMonitor ?? addon.ReaderMonitor;
+        this._SCARD_STATE_PRESENT =
+            options?.SCARD_STATE_PRESENT ?? addon.SCARD_STATE_PRESENT;
+        this._SCARD_SHARE_SHARED =
+            options?.SCARD_SHARE_SHARED ?? addon.SCARD_SHARE_SHARED;
+        this._SCARD_PROTOCOL_T0 =
+            options?.SCARD_PROTOCOL_T0 ?? addon.SCARD_PROTOCOL_T0;
+        this._SCARD_PROTOCOL_T1 =
+            options?.SCARD_PROTOCOL_T1 ?? addon.SCARD_PROTOCOL_T1;
     }
 
     /**
@@ -64,10 +81,10 @@ export class Devices extends EventEmitter {
 
         try {
             // Create context for card connections
-            this._context = new Context();
+            this._context = new this._Context();
 
             // Create native monitor
-            this._monitor = new ReaderMonitor();
+            this._monitor = new this._ReaderMonitor();
             this._running = true;
 
             // Start native monitoring with callback
@@ -199,7 +216,7 @@ export class Devices extends EventEmitter {
         this.emit('reader-attached', reader);
 
         // Check if card is already present
-        if ((state & SCARD_STATE_PRESENT) !== 0) {
+        if ((state & this._SCARD_STATE_PRESENT) !== 0) {
             await this._handleCardInserted(readerName, state, atr);
         }
     }
@@ -247,8 +264,8 @@ export class Devices extends EventEmitter {
                 try {
                     // First try with both T=0 and T=1 protocols
                     card = await reader.connect(
-                        SCARD_SHARE_SHARED,
-                        SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1
+                        this._SCARD_SHARE_SHARED,
+                        this._SCARD_PROTOCOL_T0 | this._SCARD_PROTOCOL_T1
                     );
                 } catch (dualProtocolErr) {
                     // If dual protocol fails (e.g., SCARD_W_UNRESPONSIVE_CARD),
@@ -259,8 +276,8 @@ export class Devices extends EventEmitter {
                         err.message.toLowerCase().includes('unresponsive')
                     ) {
                         card = await reader.connect(
-                            SCARD_SHARE_SHARED,
-                            SCARD_PROTOCOL_T0
+                            this._SCARD_SHARE_SHARED,
+                            this._SCARD_PROTOCOL_T0
                         );
                     } else {
                         // Re-throw if it's a different error

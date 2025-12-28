@@ -2,14 +2,16 @@
  * Mock PC/SC implementation for testing without hardware
  */
 
-import { EventEmitter } from 'events';
+import { Devices } from '../../lib/devices';
 import type {
     Card,
     CardStatus,
     Context,
+    ContextConstructor,
     MonitorEvent,
     Reader,
     ReaderMonitor,
+    ReaderMonitorConstructor,
     TransmitOptions,
 } from '../../lib/types';
 
@@ -345,195 +347,23 @@ interface MockAddon {
 /**
  * Create a mock-enabled Devices class
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createMockDevices(mockAddon: MockAddon): any {
+export function createMockDevices(mockAddon: MockAddon): typeof Devices {
     const { Context, ReaderMonitor } = mockAddon;
-    const SCARD_STATE_PRESENT = 0x20;
-    const SCARD_SHARE_SHARED = 2;
-    const SCARD_PROTOCOL_T0 = 1;
-    const SCARD_PROTOCOL_T1 = 2;
 
-    interface ReaderStateInternal {
-        hasCard: boolean;
-        card: Card | null;
-    }
-
-    class MockDevices extends EventEmitter {
-        private _monitor: MockReaderMonitor | null = null;
-        private _context: MockContext | null = null;
-        private _running = false;
-        private _readers = new Map<string, ReaderStateInternal>();
-        private _eventQueue: Promise<void> = Promise.resolve();
-
-        start(): void {
-            if (this._running) return;
-
-            try {
-                this._context = new Context();
-                this._monitor = new ReaderMonitor();
-                this._running = true;
-                this._monitor.start((event: MonitorEvent) =>
-                    this._handleEvent(event)
-                );
-            } catch (err) {
-                this.emit('error', err);
-            }
-        }
-
-        stop(): void {
-            this._running = false;
-            if (this._monitor) {
-                try {
-                    this._monitor.stop();
-                } catch {
-                    // Ignore
-                }
-                this._monitor = null;
-            }
-            for (const [, state] of this._readers) {
-                if (state.card) {
-                    try {
-                        state.card.disconnect();
-                    } catch {
-                        // Ignore
-                    }
-                }
-            }
-            this._readers.clear();
-            if (this._context) {
-                try {
-                    this._context.close();
-                } catch {
-                    // Ignore
-                }
-                this._context = null;
-            }
-        }
-
-        listReaders(): MockReader[] {
-            if (!this._context || !this._context.isValid) return [];
-            try {
-                return this._context.listReaders();
-            } catch {
-                return [];
-            }
-        }
-
-        private _handleEvent(event: MonitorEvent): void {
-            this._eventQueue = this._eventQueue.then(() =>
-                this._processEvent(event)
-            );
-        }
-
-        private async _processEvent(event: MonitorEvent): Promise<void> {
-            if (!this._running) return;
-            const { type, reader: readerName, state, atr } = event;
-
-            switch (type) {
-                case 'reader-attached':
-                    await this._handleReaderAttached(readerName, state, atr);
-                    break;
-                case 'reader-detached':
-                    this._handleReaderDetached(readerName);
-                    break;
-                case 'card-inserted':
-                    await this._handleCardInserted(readerName, state, atr);
-                    break;
-                case 'card-removed':
-                    this._handleCardRemoved(readerName);
-                    break;
-                case 'error':
-                    this.emit('error', new Error(readerName));
-                    break;
-            }
-        }
-
-        private async _handleReaderAttached(
-            readerName: string,
-            state: number,
-            atr: Buffer | null
-        ): Promise<void> {
-            this._readers.set(readerName, { hasCard: false, card: null });
-            this.emit('reader-attached', { name: readerName, state, atr });
-            if ((state & SCARD_STATE_PRESENT) !== 0) {
-                await this._handleCardInserted(readerName, state, atr);
-            }
-        }
-
-        private _handleReaderDetached(readerName: string): void {
-            const state = this._readers.get(readerName);
-            if (state?.hasCard) this._handleCardRemoved(readerName);
-            this._readers.delete(readerName);
-            this.emit('reader-detached', { name: readerName });
-        }
-
-        private async _handleCardInserted(
-            readerName: string,
-            eventState: number,
-            atr: Buffer | null
-        ): Promise<void> {
-            let state = this._readers.get(readerName);
-            if (!state) {
-                state = { hasCard: false, card: null };
-                this._readers.set(readerName, state);
-            }
-            state.hasCard = true;
-
-            try {
-                const readers = this._context!.listReaders();
-                const reader = readers.find((r) => r.name === readerName);
-                if (reader) {
-                    let card: Card;
-                    try {
-                        // First try with both T=0 and T=1 protocols
-                        card = await reader.connect(
-                            SCARD_SHARE_SHARED,
-                            SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1
-                        );
-                    } catch (dualProtocolErr) {
-                        // If dual protocol fails with "unresponsive", fallback to T=0 only
-                        const err = dualProtocolErr as Error;
-                        if (
-                            err.message &&
-                            err.message.toLowerCase().includes('unresponsive')
-                        ) {
-                            card = await reader.connect(
-                                SCARD_SHARE_SHARED,
-                                SCARD_PROTOCOL_T0
-                            );
-                        } else {
-                            throw dualProtocolErr;
-                        }
-                    }
-                    state.card = card;
-                    this.emit('card-inserted', {
-                        reader: { name: readerName, state: eventState, atr },
-                        card,
-                    });
-                }
-            } catch (err) {
-                this.emit('error', err);
-            }
-        }
-
-        private _handleCardRemoved(readerName: string): void {
-            const state = this._readers.get(readerName);
-            if (!state) return;
-            const card = state.card;
-            state.hasCard = false;
-            state.card = null;
-            if (card) {
-                try {
-                    card.disconnect();
-                } catch {
-                    // Ignore
-                }
-            }
-            this.emit('card-removed', { reader: { name: readerName }, card });
-        }
-
-        get _mockMonitor(): MockReaderMonitor | null {
-            return this._monitor;
+    /**
+     * Creates a Devices class that uses the provided mock addon.
+     * This is a subclass that exposes the internal monitor for testing.
+     */
+    class MockDevices extends Devices {
+        constructor() {
+            super({
+                Context: Context as unknown as ContextConstructor,
+                ReaderMonitor: ReaderMonitor as unknown as ReaderMonitorConstructor,
+                SCARD_STATE_PRESENT: 0x20,
+                SCARD_SHARE_SHARED: 2,
+                SCARD_PROTOCOL_T0: 1,
+                SCARD_PROTOCOL_T1: 2,
+            });
         }
     }
 
