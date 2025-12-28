@@ -1,16 +1,24 @@
-// @ts-check
-'use strict';
+import { EventEmitter } from 'events';
+import type {
+    Card,
+    Context,
+    ContextConstructor,
+    DeviceEvents,
+    MonitorEvent,
+    Reader,
+    ReaderMonitor,
+    ReaderMonitorConstructor,
+} from './types';
 
-const EventEmitter = require('events');
-const addon = require('../build/Release/smartcard_napi.node');
-
-/**
- * @typedef {import('./index').Reader} Reader
- * @typedef {import('./index').Card} Card
- * @typedef {import('./index').MonitorEvent} MonitorEvent
- * @typedef {import('./index').Context} ContextType
- * @typedef {import('./index').ReaderMonitor} ReaderMonitorType
- */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const addon = require('../../build/Release/smartcard_napi.node') as {
+    Context: ContextConstructor;
+    ReaderMonitor: ReaderMonitorConstructor;
+    SCARD_STATE_PRESENT: number;
+    SCARD_SHARE_SHARED: number;
+    SCARD_PROTOCOL_T0: number;
+    SCARD_PROTOCOL_T1: number;
+};
 
 const { Context, ReaderMonitor } = addon;
 const SCARD_STATE_PRESENT = addon.SCARD_STATE_PRESENT;
@@ -18,11 +26,10 @@ const SCARD_SHARE_SHARED = addon.SCARD_SHARE_SHARED;
 const SCARD_PROTOCOL_T0 = addon.SCARD_PROTOCOL_T0;
 const SCARD_PROTOCOL_T1 = addon.SCARD_PROTOCOL_T1;
 
-/**
- * @typedef {Object} ReaderState
- * @property {boolean} hasCard
- * @property {Card|null} card
- */
+interface ReaderStateInternal {
+    hasCard: boolean;
+    card: Card | null;
+}
 
 /**
  * High-level event-driven API for PC/SC devices
@@ -36,28 +43,22 @@ const SCARD_PROTOCOL_T1 = addon.SCARD_PROTOCOL_T1;
  * - 'card-inserted': Emitted when a card is inserted
  * - 'card-removed': Emitted when a card is removed
  * - 'error': Emitted on errors
- *
- * @extends EventEmitter
  */
-class Devices extends EventEmitter {
+export class Devices extends EventEmitter {
+    private _monitor: ReaderMonitor | null = null;
+    private _context: Context | null = null;
+    private _running = false;
+    private _readers = new Map<string, ReaderStateInternal>();
+    private _eventQueue: Promise<void> = Promise.resolve();
+
     constructor() {
         super();
-        /** @type {ReaderMonitorType|null} */
-        this._monitor = null;
-        /** @type {ContextType|null} */
-        this._context = null;
-        /** @type {boolean} */
-        this._running = false;
-        /** @type {Map<string, ReaderState>} */
-        this._readers = new Map();
-        /** @type {Promise<void>} Event queue to serialize event handling */
-        this._eventQueue = Promise.resolve();
     }
 
     /**
      * Start monitoring for device changes
      */
-    start() {
+    start(): void {
         if (this._running) {
             return;
         }
@@ -71,35 +72,35 @@ class Devices extends EventEmitter {
             this._running = true;
 
             // Start native monitoring with callback
-            this._monitor.start((event) => {
+            this._monitor.start((event: MonitorEvent) => {
                 this._handleEvent(event);
             });
         } catch (err) {
-            this.emit('error', err);
+            this.emit('error', err as Error);
         }
     }
 
     /**
      * Stop monitoring
      */
-    stop() {
+    stop(): void {
         this._running = false;
 
         if (this._monitor) {
             try {
                 this._monitor.stop();
-            } catch (err) {
+            } catch {
                 // Ignore stop errors
             }
             this._monitor = null;
         }
 
         // Disconnect any connected cards
-        for (const [name, state] of this._readers) {
+        for (const [, state] of this._readers) {
             if (state.card) {
                 try {
                     state.card.disconnect();
-                } catch (err) {
+                } catch {
                     // Ignore disconnect errors
                 }
             }
@@ -109,7 +110,7 @@ class Devices extends EventEmitter {
         if (this._context) {
             try {
                 this._context.close();
-            } catch (err) {
+            } catch {
                 // Ignore close errors
             }
             this._context = null;
@@ -118,15 +119,14 @@ class Devices extends EventEmitter {
 
     /**
      * List currently known readers
-     * @returns {Reader[]} Array of readers
      */
-    listReaders() {
+    listReaders(): Reader[] {
         if (!this._context || !this._context.isValid) {
             return [];
         }
         try {
             return this._context.listReaders();
-        } catch (err) {
+        } catch {
             return [];
         }
     }
@@ -134,19 +134,18 @@ class Devices extends EventEmitter {
     /**
      * Handle events from native monitor
      * Queues events to prevent race conditions when multiple events arrive concurrently
-     * @param {MonitorEvent} event
      */
-    _handleEvent(event) {
+    private _handleEvent(event: MonitorEvent): void {
         // Chain this event onto the queue to serialize processing
-        this._eventQueue = this._eventQueue.then(() => this._processEvent(event));
+        this._eventQueue = this._eventQueue.then(() =>
+            this._processEvent(event)
+        );
     }
 
     /**
      * Process a single event (called sequentially via queue)
-     * @param {MonitorEvent} event
-     * @returns {Promise<void>}
      */
-    async _processEvent(event) {
+    private async _processEvent(event: MonitorEvent): Promise<void> {
         if (!this._running) {
             return;
         }
@@ -179,12 +178,12 @@ class Devices extends EventEmitter {
 
     /**
      * Handle reader attached
-     * @param {string} readerName
-     * @param {number} state
-     * @param {Buffer|null} atr
-     * @returns {Promise<void>}
      */
-    async _handleReaderAttached(readerName, state, atr) {
+    private async _handleReaderAttached(
+        readerName: string,
+        state: number,
+        atr: Buffer | null
+    ): Promise<void> {
         // Initialize reader state
         this._readers.set(readerName, {
             hasCard: false,
@@ -208,9 +207,8 @@ class Devices extends EventEmitter {
 
     /**
      * Handle reader detached
-     * @param {string} readerName
      */
-    _handleReaderDetached(readerName) {
+    private _handleReaderDetached(readerName: string): void {
         const state = this._readers.get(readerName);
 
         // If card was connected, emit card-removed first
@@ -226,12 +224,12 @@ class Devices extends EventEmitter {
 
     /**
      * Handle card inserted
-     * @param {string} readerName
-     * @param {number} eventState
-     * @param {Buffer|null} atr
-     * @returns {Promise<void>}
      */
-    async _handleCardInserted(readerName, eventState, atr) {
+    private async _handleCardInserted(
+        readerName: string,
+        eventState: number,
+        atr: Buffer | null
+    ): Promise<void> {
         let state = this._readers.get(readerName);
         if (!state) {
             state = { hasCard: false, card: null };
@@ -242,11 +240,11 @@ class Devices extends EventEmitter {
 
         // Try to connect to the card
         try {
-            const readers = this._context.listReaders();
-            const reader = readers.find(r => r.name === readerName);
+            const readers = this._context!.listReaders();
+            const reader = readers.find((r) => r.name === readerName);
 
             if (reader) {
-                let card;
+                let card: Card;
                 try {
                     // First try with both T=0 and T=1 protocols
                     card = await reader.connect(
@@ -256,8 +254,11 @@ class Devices extends EventEmitter {
                 } catch (dualProtocolErr) {
                     // If dual protocol fails (e.g., SCARD_W_UNRESPONSIVE_CARD),
                     // fallback to T=0 only (issue #34)
-                    if (dualProtocolErr.message &&
-                        dualProtocolErr.message.toLowerCase().includes('unresponsive')) {
+                    const err = dualProtocolErr as Error;
+                    if (
+                        err.message &&
+                        err.message.toLowerCase().includes('unresponsive')
+                    ) {
                         card = await reader.connect(
                             SCARD_SHARE_SHARED,
                             SCARD_PROTOCOL_T0
@@ -277,15 +278,14 @@ class Devices extends EventEmitter {
             }
         } catch (err) {
             // Emit error but don't fail
-            this.emit('error', err);
+            this.emit('error', err as Error);
         }
     }
 
     /**
      * Handle card removed
-     * @param {string} readerName
      */
-    _handleCardRemoved(readerName) {
+    private _handleCardRemoved(readerName: string): void {
         const state = this._readers.get(readerName);
         if (!state) {
             return;
@@ -298,7 +298,7 @@ class Devices extends EventEmitter {
         if (card) {
             try {
                 card.disconnect();
-            } catch (err) {
+            } catch {
                 // Ignore - card is already removed
             }
         }
@@ -308,6 +308,33 @@ class Devices extends EventEmitter {
             card: card,
         });
     }
-}
 
-module.exports = { Devices };
+    // Type-safe event emitter overrides
+    on<K extends keyof DeviceEvents>(
+        event: K,
+        listener: DeviceEvents[K]
+    ): this {
+        return super.on(event, listener);
+    }
+
+    once<K extends keyof DeviceEvents>(
+        event: K,
+        listener: DeviceEvents[K]
+    ): this {
+        return super.once(event, listener);
+    }
+
+    off<K extends keyof DeviceEvents>(
+        event: K,
+        listener: DeviceEvents[K]
+    ): this {
+        return super.off(event, listener);
+    }
+
+    emit<K extends keyof DeviceEvents>(
+        event: K,
+        ...args: Parameters<DeviceEvents[K]>
+    ): boolean {
+        return super.emit(event, ...args);
+    }
+}

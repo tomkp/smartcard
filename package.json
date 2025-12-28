@@ -12,22 +12,26 @@
         "url": "https://github.com/tomkp/smartcard/issues"
     },
     "homepage": "https://github.com/tomkp/smartcard#readme",
-    "main": "lib/index.js",
-    "types": "lib/index.d.ts",
+    "main": "dist/lib/index.js",
+    "types": "dist/lib/index.d.ts",
     "gypfile": true,
     "scripts": {
         "install": "node-gyp rebuild",
-        "build": "node-gyp rebuild",
+        "build": "tsc && node-gyp rebuild",
+        "build:ts": "tsc",
         "rebuild": "node-gyp rebuild",
-        "test": "node --test test/integration/index.js && node --test test/unit/index.js",
-        "test:unit": "node --test test/unit/index.js",
-        "test:integration": "node --test test/integration/index.js",
-        "test:coverage": "c8 --include=lib/**/*.js node --test test/unit/index.js",
+        "clean": "rm -rf dist",
+        "prepublishOnly": "npm run build",
+        "test": "npm run build:ts && node --test dist/test/integration/index.js && node --test dist/test/unit/index.js",
+        "test:unit": "npm run build:ts && node --test dist/test/unit/index.js",
+        "test:integration": "npm run build:ts && node --test dist/test/integration/index.js",
+        "test:coverage": "npm run build:ts && c8 --include=dist/lib/**/*.js node --test dist/test/unit/index.js",
         "test:types": "tsd",
+        "typecheck": "tsc --noEmit",
         "coverage:report": "c8 report --reporter=text --reporter=html"
     },
     "files": [
-        "lib/",
+        "dist/lib/",
         "src/",
         "binding.gyp",
         "README.md",
@@ -40,7 +44,8 @@
         "@types/node": "^25.0.3",
         "c8": "^10.1.3",
         "node-gyp": "^10.0.0",
-        "tsd": "^0.33.0"
+        "tsd": "^0.33.0",
+        "typescript": "^5.7.2"
     },
     "engines": {
         "node": ">=18.0.0"
@@ -64,6 +69,7 @@
         "card-reader"
     ],
     "tsd": {
-        "directory": "test/types"
+        "directory": "test/types",
+        "typingsFile": "dist/lib/index.d.ts"
     }
 }

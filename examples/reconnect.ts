@@ -1,8 +1,8 @@
-#!/usr/bin/env node
+#!/usr/bin/env npx ts-node
 /**
  * Demonstrates card.reconnect() for resetting or changing protocols
  *
- * Usage: node reconnect.js
+ * Usage: npx ts-node reconnect.ts
  *
  * The reconnect() method is useful when you need to:
  * - Reset the card to a known state
@@ -10,9 +10,7 @@
  * - Recover from errors without releasing the card handle
  */
 
-'use strict';
-
-const {
+import {
     Context,
     SCARD_SHARE_SHARED,
     SCARD_SHARE_EXCLUSIVE,
@@ -22,15 +20,15 @@ const {
     SCARD_RESET_CARD,
     SCARD_UNPOWER_CARD,
     SCARD_STATE_PRESENT,
-} = require('../lib');
+} from '../lib';
 
-function protocolName(protocol) {
+function protocolName(protocol: number): string {
     if (protocol === SCARD_PROTOCOL_T0) return 'T=0';
     if (protocol === SCARD_PROTOCOL_T1) return 'T=1';
     return `Unknown (${protocol})`;
 }
 
-async function main() {
+async function main(): Promise<void> {
     console.log('Reconnect Example');
     console.log('=================\n');
 
@@ -66,10 +64,12 @@ async function main() {
 
         // Send a test command
         try {
-            const response = await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+            const response = await card.transmit([
+                0xff, 0xca, 0x00, 0x00, 0x00,
+            ]);
             console.log(`Test command response: ${response.toString('hex')}`);
         } catch (err) {
-            console.log(`Test command failed: ${err.message}`);
+            console.log(`Test command failed: ${(err as Error).message}`);
         }
 
         // Reconnect with reset
@@ -89,10 +89,12 @@ async function main() {
 
         // The card should be in a fresh state now
         try {
-            const response = await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+            const response = await card.transmit([
+                0xff, 0xca, 0x00, 0x00, 0x00,
+            ]);
             console.log(`Command after reset: ${response.toString('hex')}`);
         } catch (err) {
-            console.log(`Command failed: ${err.message}`);
+            console.log(`Command failed: ${(err as Error).message}`);
         }
 
         // Try to force a specific protocol (if supported)
@@ -105,7 +107,7 @@ async function main() {
             );
             console.log(`Protocol: ${protocolName(t0Protocol)}`);
         } catch (err) {
-            console.log(`T=0 not supported: ${err.message}`);
+            console.log(`T=0 not supported: ${(err as Error).message}`);
         }
 
         // Try T=1 only
@@ -118,7 +120,7 @@ async function main() {
             );
             console.log(`Protocol: ${protocolName(t1Protocol)}`);
         } catch (err) {
-            console.log(`T=1 not supported: ${err.message}`);
+            console.log(`T=1 not supported: ${(err as Error).message}`);
         }
 
         // Reconnect with unpower (cold reset)
@@ -131,12 +133,14 @@ async function main() {
                 SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
                 SCARD_UNPOWER_CARD
             );
-            console.log(`Protocol after power cycle: ${protocolName(unpowerProtocol)}`);
+            console.log(
+                `Protocol after power cycle: ${protocolName(unpowerProtocol)}`
+            );
 
             status = card.getStatus();
             console.log(`ATR: ${status.atr.toString('hex')}`);
         } catch (err) {
-            console.log(`Cold reset failed: ${err.message}`);
+            console.log(`Cold reset failed: ${(err as Error).message}`);
         }
 
         // Upgrade to exclusive mode
@@ -147,7 +151,9 @@ async function main() {
                 SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
                 SCARD_LEAVE_CARD
             );
-            console.log(`Got exclusive access! Protocol: ${protocolName(exclusiveProtocol)}`);
+            console.log(
+                `Got exclusive access! Protocol: ${protocolName(exclusiveProtocol)}`
+            );
 
             // Do something that requires exclusive access...
             console.log('Performing exclusive operation...');
@@ -160,14 +166,13 @@ async function main() {
             );
             console.log('Released exclusive access.');
         } catch (err) {
-            console.log(`Exclusive mode failed: ${err.message}`);
+            console.log(`Exclusive mode failed: ${(err as Error).message}`);
         }
 
         card.disconnect(SCARD_LEAVE_CARD);
         console.log('\nDone!');
-
     } catch (err) {
-        console.error(`Error: ${err.message}`);
+        console.error(`Error: ${(err as Error).message}`);
     } finally {
         ctx.close();
     }

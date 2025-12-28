@@ -1,8 +1,6 @@
-'use strict';
-
-const { describe, it } = require('node:test');
-const assert = require('node:assert');
-const {
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
+import {
     MockCard,
     MockReader,
     MockContext,
@@ -13,20 +11,20 @@ const {
     SlowMockReader,
     IntermittentFailureMockReader,
     UnstableMockCard,
-} = require('../helpers/mock');
+} from '../helpers/mock';
 
 describe('MockCard', () => {
     it('should create a mock card with protocol and ATR', () => {
-        const atr = Buffer.from([0x3B, 0x8F, 0x80, 0x01]);
+        const atr = Buffer.from([0x3b, 0x8f, 0x80, 0x01]);
         const card = new MockCard(1, atr);
 
         assert.strictEqual(card.protocol, 1);
         assert.strictEqual(card.connected, true);
-        assert(card.atr.equals(atr));
+        assert(card.atr!.equals(atr));
     });
 
     it('should disconnect card', () => {
-        const card = new MockCard(1, Buffer.from([0x3B]));
+        const card = new MockCard(1, Buffer.from([0x3b]));
         assert.strictEqual(card.connected, true);
 
         card.disconnect();
@@ -35,35 +33,37 @@ describe('MockCard', () => {
     });
 
     it('should transmit APDU and return configured response', async () => {
-        const card = new MockCard(1, Buffer.from([0x3B]), [
+        const card = new MockCard(1, Buffer.from([0x3b]), [
             {
-                command: [0xFF, 0xCA, 0x00, 0x00, 0x00],
-                response: [0x04, 0xA2, 0x3B, 0x7A, 0x90, 0x00],
+                command: [0xff, 0xca, 0x00, 0x00, 0x00],
+                response: [0x04, 0xa2, 0x3b, 0x7a, 0x90, 0x00],
             },
         ]);
 
-        const response = await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
-        assert(response.equals(Buffer.from([0x04, 0xA2, 0x3B, 0x7A, 0x90, 0x00])));
+        const response = await card.transmit([0xff, 0xca, 0x00, 0x00, 0x00]);
+        assert(
+            response.equals(Buffer.from([0x04, 0xa2, 0x3b, 0x7a, 0x90, 0x00]))
+        );
     });
 
     it('should return default success for unknown commands', async () => {
-        const card = new MockCard(1, Buffer.from([0x3B]));
-        const response = await card.transmit([0x00, 0xA4, 0x04, 0x00]);
+        const card = new MockCard(1, Buffer.from([0x3b]));
+        const response = await card.transmit([0x00, 0xa4, 0x04, 0x00]);
         assert(response.equals(Buffer.from([0x90, 0x00])));
     });
 
     it('should throw when transmitting on disconnected card', async () => {
-        const card = new MockCard(1, Buffer.from([0x3B]));
+        const card = new MockCard(1, Buffer.from([0x3b]));
         card.disconnect();
 
         await assert.rejects(
-            async () => card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]),
+            async () => card.transmit([0xff, 0xca, 0x00, 0x00, 0x00]),
             { message: 'Card is not connected' }
         );
     });
 
     it('should get card status', () => {
-        const atr = Buffer.from([0x3B, 0x8F]);
+        const atr = Buffer.from([0x3b, 0x8f]);
         const card = new MockCard(2, atr);
 
         const status = card.getStatus();
@@ -73,7 +73,7 @@ describe('MockCard', () => {
     });
 
     it('should reconnect card async', async () => {
-        const card = new MockCard(1, Buffer.from([0x3B]));
+        const card = new MockCard(1, Buffer.from([0x3b]));
         card.disconnect();
         assert.strictEqual(card.connected, false);
 
@@ -83,14 +83,16 @@ describe('MockCard', () => {
     });
 
     it('should accept maxRecvLength option in transmit', async () => {
-        const card = new MockCard(1, Buffer.from([0x3B]));
-        await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00], { maxRecvLength: 65536 });
+        const card = new MockCard(1, Buffer.from([0x3b]));
+        await card.transmit([0xff, 0xca, 0x00, 0x00, 0x00], {
+            maxRecvLength: 65536,
+        });
         assert.strictEqual(card._lastTransmitOptions.maxRecvLength, 65536);
     });
 
     it('should use default options when none provided', async () => {
-        const card = new MockCard(1, Buffer.from([0x3B]));
-        await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+        const card = new MockCard(1, Buffer.from([0x3b]));
+        await card.transmit([0xff, 0xca, 0x00, 0x00, 0x00]);
         assert.deepStrictEqual(card._lastTransmitOptions, {});
     });
 });
@@ -105,16 +107,16 @@ describe('MockReader', () => {
     });
 
     it('should create reader with card', () => {
-        const card = new MockCard(1, Buffer.from([0x3B]));
+        const card = new MockCard(1, Buffer.from([0x3b]));
         const reader = new MockReader('Test Reader', card);
 
         assert.strictEqual(reader.name, 'Test Reader');
-        assert(reader.atr.equals(Buffer.from([0x3B])));
+        assert(reader.atr!.equals(Buffer.from([0x3b])));
         assert.strictEqual(reader.state & 0x20, 0x20); // PRESENT
     });
 
     it('should connect to card', async () => {
-        const card = new MockCard(1, Buffer.from([0x3B]));
+        const card = new MockCard(1, Buffer.from([0x3b]));
         const reader = new MockReader('Test Reader', card);
 
         const connectedCard = await reader.connect(2, 3);
@@ -124,19 +126,18 @@ describe('MockReader', () => {
     it('should throw when connecting without card', async () => {
         const reader = new MockReader('Test Reader');
 
-        await assert.rejects(
-            async () => reader.connect(),
-            { message: 'No card in reader' }
-        );
+        await assert.rejects(async () => reader.connect(), {
+            message: 'No card in reader',
+        });
     });
 
     it('should insert and remove cards', () => {
         const reader = new MockReader('Test Reader');
         assert.strictEqual(reader.atr, null);
 
-        const card = new MockCard(1, Buffer.from([0x3B]));
+        const card = new MockCard(1, Buffer.from([0x3b]));
         reader.insertCard(card);
-        assert(reader.atr.equals(Buffer.from([0x3B])));
+        assert(reader.atr!.equals(Buffer.from([0x3b])));
 
         reader.removeCard();
         assert.strictEqual(reader.atr, null);
@@ -185,10 +186,9 @@ describe('MockContext', () => {
         const ctx = new MockContext();
         ctx.close();
 
-        assert.throws(
-            () => ctx.listReaders(),
-            { message: 'Context is not valid' }
-        );
+        assert.throws(() => ctx.listReaders(), {
+            message: 'Context is not valid',
+        });
     });
 });
 
@@ -209,10 +209,9 @@ describe('MockReaderMonitor', () => {
         const monitor = new MockReaderMonitor();
         monitor.start(() => {});
 
-        assert.throws(
-            () => monitor.start(() => {}),
-            { message: 'Monitor is already running' }
-        );
+        assert.throws(() => monitor.start(() => {}), {
+            message: 'Monitor is already running',
+        });
 
         monitor.stop();
     });
@@ -222,7 +221,7 @@ describe('MockReaderMonitor', () => {
         const reader = new MockReader('Test Reader');
         monitor.attachReader(reader);
 
-        const events = [];
+        const events: { type: string; reader: string }[] = [];
         monitor.start((event) => events.push(event));
 
         assert.strictEqual(events.length, 1);
@@ -234,7 +233,7 @@ describe('MockReaderMonitor', () => {
 
     it('should emit events when attaching/detaching readers', () => {
         const monitor = new MockReaderMonitor();
-        const events = [];
+        const events: { type: string }[] = [];
 
         monitor.start((event) => events.push(event));
 
@@ -254,7 +253,7 @@ describe('MockReaderMonitor', () => {
 
     it('should emit events when inserting/removing cards', () => {
         const monitor = new MockReaderMonitor();
-        const events = [];
+        const events: { type: string; atr?: Buffer | null }[] = [];
 
         const reader = new MockReader('Test Reader');
         monitor.attachReader(reader);
@@ -262,12 +261,12 @@ describe('MockReaderMonitor', () => {
         monitor.start((event) => events.push(event));
         events.length = 0; // Clear the reader-attached event
 
-        const card = new MockCard(1, Buffer.from([0x3B, 0x8F]));
+        const card = new MockCard(1, Buffer.from([0x3b, 0x8f]));
         monitor.insertCard('Test Reader', card);
 
         assert.strictEqual(events.length, 1);
         assert.strictEqual(events[0].type, 'card-inserted');
-        assert(events[0].atr.equals(Buffer.from([0x3B, 0x8F])));
+        assert(events[0].atr!.equals(Buffer.from([0x3b, 0x8f])));
 
         monitor.removeCard('Test Reader');
 
@@ -288,18 +287,24 @@ describe('MockDevices Integration', () => {
         mockMonitor.attachReader(mockReader);
 
         const MockDevices = createMockDevices({
-            Context: function() { return mockContext; },
-            ReaderMonitor: function() { return mockMonitor; },
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
         });
 
         const devices = new MockDevices();
-        const events = [];
+        const events: { type: string; reader: { name: string } }[] = [];
 
-        devices.on('reader-attached', (reader) => events.push({ type: 'reader-attached', reader }));
+        devices.on('reader-attached', (reader: { name: string }) =>
+            events.push({ type: 'reader-attached', reader })
+        );
 
         devices.start();
 
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
 
         assert.strictEqual(events.length, 1);
         assert.strictEqual(events[0].type, 'reader-attached');
@@ -309,9 +314,16 @@ describe('MockDevices Integration', () => {
     });
 
     it('should emit card-inserted events with card object', async () => {
-        const mockCard = new MockCard(1, Buffer.from([0x3B, 0x8F, 0x80, 0x01]), [
-            { command: [0xFF, 0xCA, 0x00, 0x00, 0x00], response: [0x04, 0xA2, 0x90, 0x00] },
-        ]);
+        const mockCard = new MockCard(
+            1,
+            Buffer.from([0x3b, 0x8f, 0x80, 0x01]),
+            [
+                {
+                    command: [0xff, 0xca, 0x00, 0x00, 0x00],
+                    response: [0x04, 0xa2, 0x90, 0x00],
+                },
+            ]
+        );
         const mockReader = new MockReader('ACR122U', mockCard);
         const mockContext = new MockContext();
         const mockMonitor = new MockReaderMonitor();
@@ -320,31 +332,41 @@ describe('MockDevices Integration', () => {
         mockMonitor.attachReader(mockReader);
 
         const MockDevices = createMockDevices({
-            Context: function() { return mockContext; },
-            ReaderMonitor: function() { return mockMonitor; },
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
         });
 
         const devices = new MockDevices();
-        const events = [];
+        const events: { reader: { name: string }; card: MockCard }[] = [];
 
-        devices.on('card-inserted', (event) => events.push(event));
+        devices.on(
+            'card-inserted',
+            (event: { reader: { name: string }; card: MockCard }) =>
+                events.push(event)
+        );
 
         devices.start();
 
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 50));
 
         assert.strictEqual(events.length, 1);
         assert.strictEqual(events[0].reader.name, 'ACR122U');
         assert(events[0].card);
 
-        const response = await events[0].card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
-        assert(response.equals(Buffer.from([0x04, 0xA2, 0x90, 0x00])));
+        const response = await events[0].card.transmit([
+            0xff, 0xca, 0x00, 0x00, 0x00,
+        ]);
+        assert(response.equals(Buffer.from([0x04, 0xa2, 0x90, 0x00])));
 
         devices.stop();
     });
 
     it('should emit card-removed events', async () => {
-        const mockCard = new MockCard(1, Buffer.from([0x3B]));
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
         const mockReader = new MockReader('ACR122U', mockCard);
         const mockContext = new MockContext();
         const mockMonitor = new MockReaderMonitor();
@@ -353,21 +375,25 @@ describe('MockDevices Integration', () => {
         mockMonitor.attachReader(mockReader);
 
         const MockDevices = createMockDevices({
-            Context: function() { return mockContext; },
-            ReaderMonitor: function() { return mockMonitor; },
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
         });
 
         const devices = new MockDevices();
-        const events = [];
+        const events: string[] = [];
 
         devices.on('card-inserted', () => events.push('inserted'));
         devices.on('card-removed', () => events.push('removed'));
 
         devices.start();
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 50));
 
         mockMonitor.removeCard('ACR122U');
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 50));
 
         assert(events.includes('inserted'));
         assert(events.includes('removed'));
@@ -379,8 +405,14 @@ describe('MockDevices Integration', () => {
         const mockContext = new MockContext();
         const mockMonitor = new MockReaderMonitor();
 
-        const reader1 = new MockReader('Reader 1', new MockCard(1, Buffer.from([0x3B])));
-        const reader2 = new MockReader('Reader 2', new MockCard(2, Buffer.from([0x3C])));
+        const reader1 = new MockReader(
+            'Reader 1',
+            new MockCard(1, Buffer.from([0x3b]))
+        );
+        const reader2 = new MockReader(
+            'Reader 2',
+            new MockCard(2, Buffer.from([0x3c]))
+        );
 
         mockContext.addReader(reader1);
         mockContext.addReader(reader2);
@@ -388,19 +420,27 @@ describe('MockDevices Integration', () => {
         mockMonitor.attachReader(reader2);
 
         const MockDevices = createMockDevices({
-            Context: function() { return mockContext; },
-            ReaderMonitor: function() { return mockMonitor; },
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
         });
 
         const devices = new MockDevices();
-        const readerEvents = [];
-        const cardEvents = [];
+        const readerEvents: string[] = [];
+        const cardEvents: string[] = [];
 
-        devices.on('reader-attached', (r) => readerEvents.push(r.name));
-        devices.on('card-inserted', (e) => cardEvents.push(e.reader.name));
+        devices.on('reader-attached', (r: { name: string }) =>
+            readerEvents.push(r.name)
+        );
+        devices.on('card-inserted', (e: { reader: { name: string } }) =>
+            cardEvents.push(e.reader.name)
+        );
 
         devices.start();
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
         assert.strictEqual(readerEvents.length, 2);
         assert(readerEvents.includes('Reader 1'));
@@ -422,21 +462,25 @@ describe('MockDevices Integration', () => {
         mockMonitor.attachReader(reader);
 
         const MockDevices = createMockDevices({
-            Context: function() { return mockContext; },
-            ReaderMonitor: function() { return mockMonitor; },
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
         });
 
         const devices = new MockDevices();
-        const events = [];
+        const events: string[] = [];
 
         devices.on('reader-attached', () => events.push('attached'));
         devices.on('reader-detached', () => events.push('detached'));
 
         devices.start();
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
 
         mockMonitor.detachReader('ACR122U');
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
 
         assert(events.includes('attached'));
         assert(events.includes('detached'));
@@ -447,8 +491,11 @@ describe('MockDevices Integration', () => {
 
 describe('Protocol Fallback (Issue #34)', () => {
     it('should fallback to T=0 when dual protocol fails with unresponsive error', async () => {
-        const mockCard = new MockCard(1, Buffer.from([0x3B, 0x8F]));
-        const mockReader = new UnresponsiveDualProtocolReader('Test Reader', mockCard);
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]));
+        const mockReader = new UnresponsiveDualProtocolReader(
+            'Test Reader',
+            mockCard
+        );
         const mockContext = new MockContext();
         const mockMonitor = new MockReaderMonitor();
 
@@ -456,30 +503,46 @@ describe('Protocol Fallback (Issue #34)', () => {
         mockMonitor.attachReader(mockReader);
 
         const MockDevices = createMockDevices({
-            Context: function() { return mockContext; },
-            ReaderMonitor: function() { return mockMonitor; },
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
         });
 
         const devices = new MockDevices();
-        const cardEvents = [];
-        const errors = [];
+        const cardEvents: unknown[] = [];
+        const errors: Error[] = [];
 
-        devices.on('card-inserted', (event) => cardEvents.push(event));
-        devices.on('error', (err) => errors.push(err));
+        devices.on('card-inserted', (event: unknown) => cardEvents.push(event));
+        devices.on('error', (err: Error) => errors.push(err));
 
         devices.start();
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 50));
 
-        assert.strictEqual(cardEvents.length, 1, 'Should emit card-inserted event');
+        assert.strictEqual(
+            cardEvents.length,
+            1,
+            'Should emit card-inserted event'
+        );
         assert.strictEqual(errors.length, 0, 'Should not emit error');
-        assert.strictEqual(mockReader.connectAttempts, 2, 'Should attempt connect twice (fallback)');
+        assert.strictEqual(
+            mockReader.connectAttempts,
+            2,
+            'Should attempt connect twice (fallback)'
+        );
 
         devices.stop();
     });
 
     it('should rethrow non-unresponsive errors without fallback', async () => {
-        const mockCard = new MockCard(1, Buffer.from([0x3B, 0x8F]));
-        const mockReader = new FailingMockReader('Test Reader', mockCard, 'Sharing violation');
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]));
+        const mockReader = new FailingMockReader(
+            'Test Reader',
+            mockCard,
+            'Sharing violation'
+        );
         const mockContext = new MockContext();
         const mockMonitor = new MockReaderMonitor();
 
@@ -487,30 +550,45 @@ describe('Protocol Fallback (Issue #34)', () => {
         mockMonitor.attachReader(mockReader);
 
         const MockDevices = createMockDevices({
-            Context: function() { return mockContext; },
-            ReaderMonitor: function() { return mockMonitor; },
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
         });
 
         const devices = new MockDevices();
-        const cardEvents = [];
-        const errors = [];
+        const cardEvents: unknown[] = [];
+        const errors: Error[] = [];
 
-        devices.on('card-inserted', (event) => cardEvents.push(event));
-        devices.on('error', (err) => errors.push(err));
+        devices.on('card-inserted', (event: unknown) => cardEvents.push(event));
+        devices.on('error', (err: Error) => errors.push(err));
 
         devices.start();
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 50));
 
-        assert.strictEqual(cardEvents.length, 0, 'Should not emit card-inserted event');
+        assert.strictEqual(
+            cardEvents.length,
+            0,
+            'Should not emit card-inserted event'
+        );
         assert.strictEqual(errors.length, 1, 'Should emit error');
-        assert(errors[0].message.includes('Sharing violation'), 'Error should contain original message');
-        assert.strictEqual(mockReader.connectAttempts, 1, 'Should only attempt connect once');
+        assert(
+            errors[0].message.includes('Sharing violation'),
+            'Error should contain original message'
+        );
+        assert.strictEqual(
+            mockReader.connectAttempts,
+            1,
+            'Should only attempt connect once'
+        );
 
         devices.stop();
     });
 
     it('should succeed on first try when dual protocol works', async () => {
-        const mockCard = new MockCard(1, Buffer.from([0x3B, 0x8F]));
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]));
         const mockReader = new MockReader('Test Reader', mockCard);
         const mockContext = new MockContext();
         const mockMonitor = new MockReaderMonitor();
@@ -519,23 +597,35 @@ describe('Protocol Fallback (Issue #34)', () => {
         mockMonitor.attachReader(mockReader);
 
         const MockDevices = createMockDevices({
-            Context: function() { return mockContext; },
-            ReaderMonitor: function() { return mockMonitor; },
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
         });
 
         const devices = new MockDevices();
-        const cardEvents = [];
-        const errors = [];
+        const cardEvents: unknown[] = [];
+        const errors: Error[] = [];
 
-        devices.on('card-inserted', (event) => cardEvents.push(event));
-        devices.on('error', (err) => errors.push(err));
+        devices.on('card-inserted', (event: unknown) => cardEvents.push(event));
+        devices.on('error', (err: Error) => errors.push(err));
 
         devices.start();
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 50));
 
-        assert.strictEqual(cardEvents.length, 1, 'Should emit card-inserted event');
+        assert.strictEqual(
+            cardEvents.length,
+            1,
+            'Should emit card-inserted event'
+        );
         assert.strictEqual(errors.length, 0, 'Should not emit error');
-        assert.strictEqual(mockReader.connectAttempts, 1, 'Should only attempt connect once');
+        assert.strictEqual(
+            mockReader.connectAttempts,
+            1,
+            'Should only attempt connect once'
+        );
 
         devices.stop();
     });
@@ -543,7 +633,7 @@ describe('Protocol Fallback (Issue #34)', () => {
 
 describe('Enhanced Mock Scenarios', () => {
     it('SlowMockReader should delay before connecting', async () => {
-        const mockCard = new MockCard(1, Buffer.from([0x3B]));
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
         const reader = new SlowMockReader('Test Reader', mockCard, 50);
 
         const start = Date.now();
@@ -552,66 +642,96 @@ describe('Enhanced Mock Scenarios', () => {
 
         assert(card, 'Should return card');
         assert(elapsed >= 40, `Should delay at least 40ms, got ${elapsed}ms`);
-        assert.strictEqual(reader.connectAttempts, 1, 'Should record connect attempt');
+        assert.strictEqual(
+            reader.connectAttempts,
+            1,
+            'Should record connect attempt'
+        );
     });
 
     it('IntermittentFailureMockReader should fail then succeed', async () => {
-        const mockCard = new MockCard(1, Buffer.from([0x3B]));
-        const reader = new IntermittentFailureMockReader('Test Reader', mockCard, 2, 'Temporary failure');
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
+        const reader = new IntermittentFailureMockReader(
+            'Test Reader',
+            mockCard,
+            2,
+            'Temporary failure'
+        );
 
         // First attempt should fail
-        await assert.rejects(
-            async () => reader.connect(),
-            { message: 'Temporary failure' }
-        );
+        await assert.rejects(async () => reader.connect(), {
+            message: 'Temporary failure',
+        });
 
         // Second attempt should fail
-        await assert.rejects(
-            async () => reader.connect(),
-            { message: 'Temporary failure' }
-        );
+        await assert.rejects(async () => reader.connect(), {
+            message: 'Temporary failure',
+        });
 
         // Third attempt should succeed
         const card = await reader.connect();
         assert(card, 'Third attempt should succeed');
-        assert.strictEqual(reader.connectAttempts, 3, 'Should record all attempts');
+        assert.strictEqual(
+            reader.connectAttempts,
+            3,
+            'Should record all attempts'
+        );
     });
 
     it('UnstableMockCard should fail after N transmits', async () => {
-        const card = new UnstableMockCard(1, Buffer.from([0x3B]), [], 2);
+        const card = new UnstableMockCard(1, Buffer.from([0x3b]), [], 2);
 
         // First two transmits should succeed
-        await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
-        await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+        await card.transmit([0xff, 0xca, 0x00, 0x00, 0x00]);
+        await card.transmit([0xff, 0xca, 0x00, 0x00, 0x00]);
 
         // Third should fail
         await assert.rejects(
-            async () => card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]),
+            async () => card.transmit([0xff, 0xca, 0x00, 0x00, 0x00]),
             { message: 'Card was removed' }
         );
 
-        assert.strictEqual(card.connected, false, 'Card should be disconnected');
+        assert.strictEqual(
+            card.connected,
+            false,
+            'Card should be disconnected'
+        );
     });
 
     it('MockCard with delay should simulate slow responses', async () => {
-        const card = new MockCard(1, Buffer.from([0x3B]), [], { transmitDelay: 50 });
+        const card = new MockCard(1, Buffer.from([0x3b]), [], {
+            transmitDelay: 50,
+        });
 
         const start = Date.now();
-        await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+        await card.transmit([0xff, 0xca, 0x00, 0x00, 0x00]);
         const elapsed = Date.now() - start;
 
         assert(elapsed >= 40, `Should delay at least 40ms, got ${elapsed}ms`);
-        assert.strictEqual(card.transmitCount, 1, 'Should record transmit count');
+        assert.strictEqual(
+            card.transmitCount,
+            1,
+            'Should record transmit count'
+        );
     });
 
     it('MockCard should track transmit and control counts', () => {
-        const card = new MockCard(1, Buffer.from([0x3B]));
-        assert.strictEqual(card.transmitCount, 0, 'Initial transmit count should be 0');
-        assert.strictEqual(card.controlCount, 0, 'Initial control count should be 0');
+        const card = new MockCard(1, Buffer.from([0x3b]));
+        assert.strictEqual(
+            card.transmitCount,
+            0,
+            'Initial transmit count should be 0'
+        );
+        assert.strictEqual(
+            card.controlCount,
+            0,
+            'Initial control count should be 0'
+        );
     });
 });
 
 describe('Error Classes', () => {
+    // Dynamic import for the error classes
     const {
         PCSCError,
         CardRemovedError,
@@ -620,6 +740,7 @@ describe('Error Classes', () => {
         ServiceNotRunningError,
         SharingViolationError,
         createPCSCError,
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
     } = require('../../lib/errors');
 
     it('PCSCError should have code property', () => {
@@ -638,28 +759,28 @@ describe('Error Classes', () => {
 
     it('TimeoutError should have correct code', () => {
         const err = new TimeoutError();
-        assert.strictEqual(err.code, 0x8010000A);
+        assert.strictEqual(err.code, 0x8010000a);
         assert.strictEqual(err.name, 'TimeoutError');
         assert(err instanceof PCSCError);
     });
 
     it('NoReadersError should have correct code', () => {
         const err = new NoReadersError();
-        assert.strictEqual(err.code, 0x8010002E);
+        assert.strictEqual(err.code, 0x8010002e);
         assert.strictEqual(err.name, 'NoReadersError');
         assert(err instanceof PCSCError);
     });
 
     it('ServiceNotRunningError should have correct code', () => {
         const err = new ServiceNotRunningError();
-        assert.strictEqual(err.code, 0x8010001D);
+        assert.strictEqual(err.code, 0x8010001d);
         assert.strictEqual(err.name, 'ServiceNotRunningError');
         assert(err instanceof PCSCError);
     });
 
     it('SharingViolationError should have correct code', () => {
         const err = new SharingViolationError();
-        assert.strictEqual(err.code, 0x8010000B);
+        assert.strictEqual(err.code, 0x8010000b);
         assert.strictEqual(err.name, 'SharingViolationError');
         assert(err instanceof PCSCError);
     });
@@ -671,27 +792,27 @@ describe('Error Classes', () => {
     });
 
     it('createPCSCError should return TimeoutError for 0x8010000A', () => {
-        const err = createPCSCError('Timeout', 0x8010000A);
+        const err = createPCSCError('Timeout', 0x8010000a);
         assert(err instanceof TimeoutError);
-        assert.strictEqual(err.code, 0x8010000A);
+        assert.strictEqual(err.code, 0x8010000a);
     });
 
     it('createPCSCError should return NoReadersError for 0x8010002E', () => {
-        const err = createPCSCError('No readers', 0x8010002E);
+        const err = createPCSCError('No readers', 0x8010002e);
         assert(err instanceof NoReadersError);
-        assert.strictEqual(err.code, 0x8010002E);
+        assert.strictEqual(err.code, 0x8010002e);
     });
 
     it('createPCSCError should return ServiceNotRunningError for 0x8010001D', () => {
-        const err = createPCSCError('Service not running', 0x8010001D);
+        const err = createPCSCError('Service not running', 0x8010001d);
         assert(err instanceof ServiceNotRunningError);
-        assert.strictEqual(err.code, 0x8010001D);
+        assert.strictEqual(err.code, 0x8010001d);
     });
 
     it('createPCSCError should return SharingViolationError for 0x8010000B', () => {
-        const err = createPCSCError('Sharing violation', 0x8010000B);
+        const err = createPCSCError('Sharing violation', 0x8010000b);
         assert(err instanceof SharingViolationError);
-        assert.strictEqual(err.code, 0x8010000B);
+        assert.strictEqual(err.code, 0x8010000b);
     });
 
     it('createPCSCError should return PCSCError for unknown codes', () => {
@@ -710,6 +831,7 @@ describe('Control Code Constants', () => {
         FEATURE_MODIFY_PIN_DIRECT,
         FEATURE_IFD_PIN_PROPERTIES,
         FEATURE_GET_TLV_PROPERTIES,
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
     } = require('../../lib');
 
     it('SCARD_CTL_CODE should generate correct control codes', () => {
@@ -726,7 +848,7 @@ describe('Control Code Constants', () => {
     it('FEATURE constants should have correct values', () => {
         assert.strictEqual(FEATURE_VERIFY_PIN_DIRECT, 0x06);
         assert.strictEqual(FEATURE_MODIFY_PIN_DIRECT, 0x07);
-        assert.strictEqual(FEATURE_IFD_PIN_PROPERTIES, 0x0A);
+        assert.strictEqual(FEATURE_IFD_PIN_PROPERTIES, 0x0a);
         assert.strictEqual(FEATURE_GET_TLV_PROPERTIES, 0x12);
     });
 });
