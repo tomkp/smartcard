@@ -14,6 +14,12 @@
     "homepage": "https://github.com/tomkp/smartcard#readme",
     "main": "dist/lib/index.js",
     "types": "dist/lib/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/lib/index.d.ts",
+            "require": "./dist/lib/index.js"
+        }
+    },
     "gypfile": true,
     "scripts": {
         "install": "node-gyp rebuild",
