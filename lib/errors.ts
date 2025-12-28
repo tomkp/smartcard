@@ -1,15 +1,10 @@
-// @ts-check
-'use strict';
-
 /**
  * Base error class for PC/SC errors
  */
-class PCSCError extends Error {
-    /**
-     * @param {string} message
-     * @param {number} code
-     */
-    constructor(message, code) {
+export class PCSCError extends Error {
+    readonly code: number;
+
+    constructor(message: string, code: number) {
         super(message);
         this.name = 'PCSCError';
         this.code = code;
@@ -20,7 +15,7 @@ class PCSCError extends Error {
 /**
  * Error thrown when a card is removed during an operation
  */
-class CardRemovedError extends PCSCError {
+export class CardRemovedError extends PCSCError {
     constructor(message = 'Card was removed') {
         super(message, 0x80100069);
         this.name = 'CardRemovedError';
@@ -30,9 +25,9 @@ class CardRemovedError extends PCSCError {
 /**
  * Error thrown when an operation times out
  */
-class TimeoutError extends PCSCError {
+export class TimeoutError extends PCSCError {
     constructor(message = 'Operation timed out') {
-        super(message, 0x8010000A);
+        super(message, 0x8010000a);
         this.name = 'TimeoutError';
     }
 }
@@ -40,9 +35,9 @@ class TimeoutError extends PCSCError {
 /**
  * Error thrown when no readers are available
  */
-class NoReadersError extends PCSCError {
+export class NoReadersError extends PCSCError {
     constructor(message = 'No readers available') {
-        super(message, 0x8010002E);
+        super(message, 0x8010002e);
         this.name = 'NoReadersError';
     }
 }
@@ -50,9 +45,9 @@ class NoReadersError extends PCSCError {
 /**
  * Error thrown when PC/SC service is not running
  */
-class ServiceNotRunningError extends PCSCError {
+export class ServiceNotRunningError extends PCSCError {
     constructor(message = 'PC/SC service not running') {
-        super(message, 0x8010001D);
+        super(message, 0x8010001d);
         this.name = 'ServiceNotRunningError';
     }
 }
@@ -60,45 +55,33 @@ class ServiceNotRunningError extends PCSCError {
 /**
  * Error thrown when there's a sharing violation
  */
-class SharingViolationError extends PCSCError {
+export class SharingViolationError extends PCSCError {
     constructor(message = 'Sharing violation - card is in use') {
-        super(message, 0x8010000B);
+        super(message, 0x8010000b);
         this.name = 'SharingViolationError';
     }
 }
 
+type PCSCErrorConstructor = new (message?: string) => PCSCError;
+
 /**
  * PC/SC error codes mapped to specific error classes
- * @type {Map<number, typeof PCSCError>}
  */
-const ERROR_CODE_MAP = new Map([
-    [0x80100069, CardRemovedError],      // SCARD_W_REMOVED_CARD
-    [0x8010000A, TimeoutError],           // SCARD_E_TIMEOUT
-    [0x8010002E, NoReadersError],         // SCARD_E_NO_READERS_AVAILABLE
-    [0x8010001D, ServiceNotRunningError], // SCARD_E_NO_SERVICE
-    [0x8010000B, SharingViolationError],  // SCARD_E_SHARING_VIOLATION
+const ERROR_CODE_MAP = new Map<number, PCSCErrorConstructor>([
+    [0x80100069, CardRemovedError], // SCARD_W_REMOVED_CARD
+    [0x8010000a, TimeoutError], // SCARD_E_TIMEOUT
+    [0x8010002e, NoReadersError], // SCARD_E_NO_READERS_AVAILABLE
+    [0x8010001d, ServiceNotRunningError], // SCARD_E_NO_SERVICE
+    [0x8010000b, SharingViolationError], // SCARD_E_SHARING_VIOLATION
 ]);
 
 /**
  * Factory function to create the appropriate error class based on PC/SC error code
- * @param {string} message - Error message
- * @param {number} code - PC/SC error code
- * @returns {PCSCError} The appropriate error instance
  */
-function createPCSCError(message, code) {
+export function createPCSCError(message: string, code: number): PCSCError {
     const ErrorClass = ERROR_CODE_MAP.get(code);
     if (ErrorClass) {
         return new ErrorClass(message);
     }
     return new PCSCError(message, code);
 }
-
-module.exports = {
-    PCSCError,
-    CardRemovedError,
-    TimeoutError,
-    NoReadersError,
-    ServiceNotRunningError,
-    SharingViolationError,
-    createPCSCError,
-};

@@ -1,8 +1,6 @@
-'use strict';
-
-const { describe, it, before, after } = require('node:test');
-const assert = require('node:assert');
-const {
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
+import {
     Context,
     Devices,
     SCARD_SHARE_SHARED,
@@ -10,10 +8,11 @@ const {
     SCARD_PROTOCOL_T1,
     SCARD_STATE_PRESENT,
     SCARD_LEAVE_CARD,
-} = require('../../lib');
+} from '../../lib';
+import type { Reader as ReaderType } from '../../lib/types';
 
 // Helper functions to check hardware availability
-function hasReaders() {
+function hasReaders(): boolean {
     try {
         const ctx = new Context();
         const readers = ctx.listReaders();
@@ -24,12 +23,12 @@ function hasReaders() {
     }
 }
 
-function hasCardPresent() {
+function hasCardPresent(): boolean {
     try {
         const ctx = new Context();
         const readers = ctx.listReaders();
         ctx.close();
-        return readers.some(r => (r.state & SCARD_STATE_PRESENT) !== 0);
+        return readers.some((r) => (r.state & SCARD_STATE_PRESENT) !== 0);
     } catch {
         return false;
     }
@@ -86,7 +85,10 @@ describe('Reader (hardware dependent)', () => {
         try {
             const readers = ctx.listReaders();
             const reader = readers[0];
-            assert(typeof reader.state === 'number', 'State should be a number');
+            assert(
+                typeof reader.state === 'number',
+                'State should be a number'
+            );
         } finally {
             ctx.close();
         }
@@ -102,14 +104,19 @@ describe('Card operations (hardware dependent)', () => {
         const ctx = new Context();
         try {
             const readers = ctx.listReaders();
-            const reader = readers.find(r => (r.state & SCARD_STATE_PRESENT) !== 0);
-            const card = await reader.connect(
+            const reader = readers.find(
+                (r: ReaderType) => (r.state & SCARD_STATE_PRESENT) !== 0
+            );
+            const card = await reader!.connect(
                 SCARD_SHARE_SHARED,
                 SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1
             );
             assert(card, 'Should return a card object');
             assert(card.connected, 'Card should be connected');
-            assert(typeof card.protocol === 'number', 'Protocol should be a number');
+            assert(
+                typeof card.protocol === 'number',
+                'Protocol should be a number'
+            );
             card.disconnect(SCARD_LEAVE_CARD);
         } finally {
             ctx.close();
@@ -124,17 +131,22 @@ describe('Card operations (hardware dependent)', () => {
         const ctx = new Context();
         try {
             const readers = ctx.listReaders();
-            const reader = readers.find(r => (r.state & SCARD_STATE_PRESENT) !== 0);
-            const card = await reader.connect(
+            const reader = readers.find(
+                (r: ReaderType) => (r.state & SCARD_STATE_PRESENT) !== 0
+            );
+            const card = await reader!.connect(
                 SCARD_SHARE_SHARED,
                 SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1
             );
 
             try {
-                const selectCmd = Buffer.from([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+                const selectCmd = Buffer.from([0xff, 0xca, 0x00, 0x00, 0x00]);
                 const response = await card.transmit(selectCmd);
-                assert(Buffer.isBuffer(response), 'Response should be a buffer');
-            } catch (err) {
+                assert(
+                    Buffer.isBuffer(response),
+                    'Response should be a buffer'
+                );
+            } catch {
                 // Some cards don't support this command, which is OK
             }
 
@@ -152,16 +164,27 @@ describe('Card operations (hardware dependent)', () => {
         const ctx = new Context();
         try {
             const readers = ctx.listReaders();
-            const reader = readers.find(r => (r.state & SCARD_STATE_PRESENT) !== 0);
-            const card = await reader.connect(
+            const reader = readers.find(
+                (r: ReaderType) => (r.state & SCARD_STATE_PRESENT) !== 0
+            );
+            const card = await reader!.connect(
                 SCARD_SHARE_SHARED,
                 SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1
             );
 
             const status = card.getStatus();
-            assert(typeof status.state === 'number', 'Status state should be a number');
-            assert(typeof status.protocol === 'number', 'Status protocol should be a number');
-            assert(Buffer.isBuffer(status.atr), 'Status ATR should be a buffer');
+            assert(
+                typeof status.state === 'number',
+                'Status state should be a number'
+            );
+            assert(
+                typeof status.protocol === 'number',
+                'Status protocol should be a number'
+            );
+            assert(
+                Buffer.isBuffer(status.atr),
+                'Status ATR should be a buffer'
+            );
 
             card.disconnect(SCARD_LEAVE_CARD);
         } finally {
@@ -179,15 +202,20 @@ describe('Devices (Event API)', () => {
     it('should start and stop monitoring', async () => {
         const devices = new Devices();
 
-        await new Promise((resolve, reject) => {
+        await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
                 devices.stop();
                 resolve();
             }, 1000);
 
-            devices.on('error', (err) => {
-                const expectedErrors = ['No readers', 'service', 'unresponsive', 'Sharing violation'];
-                const isExpected = expectedErrors.some(msg =>
+            devices.on('error', (err: Error) => {
+                const expectedErrors = [
+                    'No readers',
+                    'service',
+                    'unresponsive',
+                    'Sharing violation',
+                ];
+                const isExpected = expectedErrors.some((msg) =>
                     err.message.toLowerCase().includes(msg.toLowerCase())
                 );
 
@@ -213,23 +241,30 @@ describe('Devices (Event API)', () => {
         checkCtx.close();
 
         const devices = new Devices();
-        const attachedReaders = [];
+        const attachedReaders: unknown[] = [];
 
-        await new Promise((resolve, reject) => {
+        await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
                 devices.stop();
                 if (attachedReaders.length === existingReaders.length) {
                     resolve();
                 } else {
-                    reject(new Error(
-                        `Expected ${existingReaders.length} reader-attached events but received ${attachedReaders.length}`
-                    ));
+                    reject(
+                        new Error(
+                            `Expected ${existingReaders.length} reader-attached events but received ${attachedReaders.length}`
+                        )
+                    );
                 }
             }, 1000);
 
-            devices.on('error', (err) => {
-                const expectedErrors = ['No readers', 'service', 'unresponsive', 'Sharing violation'];
-                const isExpected = expectedErrors.some(msg =>
+            devices.on('error', (err: Error) => {
+                const expectedErrors = [
+                    'No readers',
+                    'service',
+                    'unresponsive',
+                    'Sharing violation',
+                ];
+                const isExpected = expectedErrors.some((msg) =>
                     err.message.toLowerCase().includes(msg.toLowerCase())
                 );
                 if (!isExpected) {
@@ -239,7 +274,7 @@ describe('Devices (Event API)', () => {
                 }
             });
 
-            devices.on('reader-attached', (reader) => {
+            devices.on('reader-attached', (reader: unknown) => {
                 attachedReaders.push(reader);
             });
 
@@ -256,35 +291,47 @@ describe('Protocol Fallback (Issue #34)', () => {
         }
 
         const devices = new Devices();
-        const cardInsertedEvents = [];
-        const errors = [];
+        const cardInsertedEvents: unknown[] = [];
+        const errors: Error[] = [];
 
-        await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
+        await new Promise<void>((resolve, reject) => {
+            const _timeout = setTimeout(() => {
                 devices.stop();
 
-                const unresponsiveErrors = errors.filter(err =>
+                const unresponsiveErrors = errors.filter((err) =>
                     err.message.toLowerCase().includes('unresponsive')
                 );
+                void _timeout; // Reference to avoid unused variable warning
 
                 if (unresponsiveErrors.length > 0) {
-                    reject(new Error(
-                        `Got ${unresponsiveErrors.length} unresponsive card error(s). ` +
-                        `Devices should fallback to T=0 protocol when T=0|T=1 fails.`
-                    ));
+                    reject(
+                        new Error(
+                            `Got ${unresponsiveErrors.length} unresponsive card error(s). ` +
+                                `Devices should fallback to T=0 protocol when T=0|T=1 fails.`
+                        )
+                    );
                     return;
                 }
 
                 resolve();
             }, 2000);
 
-            devices.on('error', (err) => {
+            devices.on('error', (err: Error) => {
                 errors.push(err);
             });
 
-            devices.on('card-inserted', ({ reader, card }) => {
-                cardInsertedEvents.push({ reader, card });
-            });
+            devices.on(
+                'card-inserted',
+                ({
+                    reader,
+                    card,
+                }: {
+                    reader: unknown;
+                    card: unknown;
+                }) => {
+                    cardInsertedEvents.push({ reader, card });
+                }
+            );
 
             devices.start();
         });

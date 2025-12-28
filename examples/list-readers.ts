@@ -1,15 +1,13 @@
-#!/usr/bin/env node
+#!/usr/bin/env npx ts-node
 /**
  * List all available PC/SC readers
  *
- * Usage: node list-readers.js
+ * Usage: npx ts-node list-readers.ts
  */
 
-'use strict';
+import { Context, SCARD_STATE_PRESENT } from '../lib';
 
-const { Context, SCARD_STATE_PRESENT } = require('../lib');
-
-function main() {
+function main(): void {
     console.log('Creating PC/SC context...');
     const ctx = new Context();
 
@@ -26,8 +24,12 @@ function main() {
         if (readers.length === 0) {
             console.log('No readers found.');
             console.log('\nMake sure:');
-            console.log('  - A PC/SC compatible reader is connected');
-            console.log('  - On Linux: pcscd service is running (sudo systemctl start pcscd)');
+            console.log(
+                '  - A PC/SC compatible reader is connected'
+            );
+            console.log(
+                '  - On Linux: pcscd service is running (sudo systemctl start pcscd)'
+            );
         } else {
             console.log(`Found ${readers.length} reader(s):\n`);
 
@@ -43,7 +45,7 @@ function main() {
             }
         }
     } catch (err) {
-        console.error('Error:', err.message);
+        console.error('Error:', (err as Error).message);
     } finally {
         ctx.close();
     }

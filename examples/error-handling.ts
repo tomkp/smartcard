@@ -1,15 +1,13 @@
-#!/usr/bin/env node
+#!/usr/bin/env npx ts-node
 /**
  * Demonstrates error handling with specific error types
  *
- * Usage: node error-handling.js
+ * Usage: npx ts-node error-handling.ts
  *
  * This example shows how to catch and handle different PC/SC error types.
  */
 
-'use strict';
-
-const {
+import {
     Context,
     Devices,
     PCSCError,
@@ -21,15 +19,16 @@ const {
     SCARD_SHARE_EXCLUSIVE,
     SCARD_PROTOCOL_T0,
     SCARD_PROTOCOL_T1,
-} = require('../lib');
+} from '../lib';
+import type { Card, ReaderEventInfo } from '../lib/types';
 
 /**
  * Example 1: Handling errors with the low-level Context API
  */
-async function lowLevelExample() {
+async function lowLevelExample(): Promise<void> {
     console.log('=== Low-Level Error Handling ===\n');
 
-    let ctx;
+    let ctx: InstanceType<typeof Context> | undefined;
     try {
         ctx = new Context();
     } catch (err) {
@@ -62,11 +61,10 @@ async function lowLevelExample() {
         console.log('Connected! Sending command...');
 
         // Send a command - card might be removed during this
-        const response = await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
+        const response = await card.transmit([0xff, 0xca, 0x00, 0x00, 0x00]);
         console.log(`Response: ${response.toString('hex')}`);
 
         card.disconnect();
-
     } catch (err) {
         if (err instanceof NoReadersError) {
             console.log('No readers available. Please connect a reader.');
@@ -83,7 +81,7 @@ async function lowLevelExample() {
             console.log(`Error code: 0x${err.code.toString(16)}`);
         } else {
             // Non-PC/SC error
-            console.log(`Unexpected error: ${err.message}`);
+            console.log(`Unexpected error: ${(err as Error).message}`);
         }
     } finally {
         if (ctx) {
@@ -95,34 +93,45 @@ async function lowLevelExample() {
 /**
  * Example 2: Handling errors with the high-level Devices API
  */
-function highLevelExample() {
+export function highLevelExample(): void {
     console.log('\n=== High-Level Error Handling ===\n');
 
     const devices = new Devices();
 
-    devices.on('card-inserted', async ({ reader, card }) => {
-        console.log(`Card inserted in ${reader.name}`);
+    devices.on(
+        'card-inserted',
+        async ({ reader, card }: { reader: ReaderEventInfo; card: Card }) => {
+            console.log(`Card inserted in ${reader.name}`);
 
-        try {
-            // This might fail if card is removed quickly
-            const response = await card.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00]);
-            const sw = (response[response.length - 2] << 8) | response[response.length - 1];
+            try {
+                // This might fail if card is removed quickly
+                const response = await card.transmit([
+                    0xff, 0xca, 0x00, 0x00, 0x00,
+                ]);
+                const sw =
+                    (response[response.length - 2] << 8) |
+                    response[response.length - 1];
 
-            if (sw === 0x9000) {
-                console.log(`UID: ${response.slice(0, -2).toString('hex')}`);
-            }
-        } catch (err) {
-            if (err instanceof CardRemovedError) {
-                console.log('Card was removed before we could read it.');
-            } else if (err instanceof PCSCError) {
-                console.log(`Card error: ${err.message} (code: 0x${err.code.toString(16)})`);
-            } else {
-                console.log(`Error: ${err.message}`);
+                if (sw === 0x9000) {
+                    console.log(
+                        `UID: ${response.subarray(0, -2).toString('hex')}`
+                    );
+                }
+            } catch (err) {
+                if (err instanceof CardRemovedError) {
+                    console.log('Card was removed before we could read it.');
+                } else if (err instanceof PCSCError) {
+                    console.log(
+                        `Card error: ${err.message} (code: 0x${err.code.toString(16)})`
+                    );
+                } else {
+                    console.log(`Error: ${(err as Error).message}`);
+                }
             }
         }
-    });
+    );
 
-    devices.on('error', (err) => {
+    devices.on('error', (err: Error) => {
         // The Devices class emits errors that occur during monitoring
         if (err instanceof ServiceNotRunningError) {
             console.log('PC/SC service stopped.');
@@ -135,7 +144,7 @@ function highLevelExample() {
         }
     });
 
-    devices.on('reader-attached', (reader) => {
+    devices.on('reader-attached', (reader: ReaderEventInfo) => {
         console.log(`Reader attached: ${reader.name}`);
     });
 
@@ -157,7 +166,7 @@ function highLevelExample() {
 /**
  * Example 3: Using try/catch with specific error recovery
  */
-async function errorRecoveryExample() {
+async function errorRecoveryExample(): Promise<void> {
     console.log('\n=== Error Recovery Example ===\n');
 
     const ctx = new Context();
@@ -170,7 +179,7 @@ async function errorRecoveryExample() {
         }
 
         const reader = readers[0];
-        let card;
+        let card: Card | undefined;
 
         // Retry logic for transient errors
         const maxRetries = 3;
@@ -181,9 +190,12 @@ async function errorRecoveryExample() {
                 console.log('Connected successfully!');
                 break;
             } catch (err) {
-                if (err instanceof SharingViolationError && attempt < maxRetries) {
+                if (
+                    err instanceof SharingViolationError &&
+                    attempt < maxRetries
+                ) {
                     console.log('Card busy, waiting 1 second...');
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    await new Promise((resolve) => setTimeout(resolve, 1000));
                     continue;
                 }
                 throw err;
@@ -195,14 +207,13 @@ async function errorRecoveryExample() {
             console.log(`ATR: ${status.atr.toString('hex')}`);
             card.disconnect();
         }
-
     } finally {
         ctx.close();
     }
 }
 
 // Run the examples
-async function main() {
+async function main(): Promise<void> {
     await lowLevelExample();
     await errorRecoveryExample();
 

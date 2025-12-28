@@ -1,27 +1,25 @@
-#!/usr/bin/env node
+#!/usr/bin/env npx ts-node
 /**
  * Send a custom APDU command to a card
  *
- * Usage: node send-apdu.js <hex-apdu> [reader-index]
+ * Usage: npx ts-node send-apdu.ts <hex-apdu> [reader-index]
  *
  * Examples:
- *   node send-apdu.js "FF CA 00 00 00"        # Get UID
- *   node send-apdu.js "00 A4 04 00"           # Select (no data)
- *   node send-apdu.js "00A40400" 1            # Use second reader
+ *   npx ts-node send-apdu.ts "FF CA 00 00 00"        # Get UID
+ *   npx ts-node send-apdu.ts "00 A4 04 00"           # Select (no data)
+ *   npx ts-node send-apdu.ts "00A40400" 1            # Use second reader
  */
 
-'use strict';
-
-const {
+import {
     Context,
     SCARD_SHARE_SHARED,
     SCARD_PROTOCOL_T0,
     SCARD_PROTOCOL_T1,
     SCARD_LEAVE_CARD,
     SCARD_STATE_PRESENT,
-} = require('../lib');
+} from '../lib';
 
-function parseHex(str) {
+function parseHex(str: string): Buffer {
     // Remove spaces, 0x prefixes, and parse
     const clean = str.replace(/\s+/g, '').replace(/0x/gi, '');
     if (!/^[0-9a-fA-F]*$/.test(clean)) {
@@ -31,34 +29,34 @@ function parseHex(str) {
         throw new Error('Hex string must have even length');
     }
 
-    const bytes = [];
+    const bytes: number[] = [];
     for (let i = 0; i < clean.length; i += 2) {
         bytes.push(parseInt(clean.substr(i, 2), 16));
     }
     return Buffer.from(bytes);
 }
 
-function formatResponse(buffer) {
+function formatResponse(buffer: Buffer): string {
     const hex = buffer.toString('hex').toUpperCase();
     // Add spaces every 2 characters
-    return hex.match(/.{2}/g).join(' ');
+    return hex.match(/.{2}/g)!.join(' ');
 }
 
-async function main() {
+async function main(): Promise<void> {
     if (process.argv.length < 3) {
-        console.log('Usage: node send-apdu.js <hex-apdu> [reader-index]');
+        console.log('Usage: npx ts-node send-apdu.ts <hex-apdu> [reader-index]');
         console.log('');
         console.log('Examples:');
-        console.log('  node send-apdu.js "FF CA 00 00 00"    # Get UID');
-        console.log('  node send-apdu.js "00 A4 04 00"       # Select');
+        console.log('  npx ts-node send-apdu.ts "FF CA 00 00 00"    # Get UID');
+        console.log('  npx ts-node send-apdu.ts "00 A4 04 00"       # Select');
         process.exit(1);
     }
 
-    let apdu;
+    let apdu: Buffer;
     try {
         apdu = parseHex(process.argv[2]);
     } catch (err) {
-        console.error(`Invalid APDU: ${err.message}`);
+        console.error(`Invalid APDU: ${(err as Error).message}`);
         process.exit(1);
     }
 
@@ -96,7 +94,8 @@ async function main() {
             SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1
         );
 
-        const protocolName = card.protocol === SCARD_PROTOCOL_T0 ? 'T=0' : 'T=1';
+        const protocolName =
+            card.protocol === SCARD_PROTOCOL_T0 ? 'T=0' : 'T=1';
         console.log(`Protocol: ${protocolName}`);
         console.log('');
 
@@ -119,29 +118,30 @@ async function main() {
                 console.log('Status: Success');
             } else if (sw1 === 0x61) {
                 console.log(`Status: ${sw2} bytes available`);
-            } else if (sw1 === 0x6C) {
+            } else if (sw1 === 0x6c) {
                 console.log(`Status: Wrong Le, use Le=${sw2}`);
-            } else if (sw === 0x6A82) {
+            } else if (sw === 0x6a82) {
                 console.log('Status: File not found');
-            } else if (sw === 0x6A86) {
+            } else if (sw === 0x6a86) {
                 console.log('Status: Incorrect P1-P2');
-            } else if (sw === 0x6D00) {
+            } else if (sw === 0x6d00) {
                 console.log('Status: Instruction not supported');
-            } else if (sw === 0x6E00) {
+            } else if (sw === 0x6e00) {
                 console.log('Status: Class not supported');
             }
 
             // Data portion
             if (response.length > 2) {
-                const data = response.slice(0, -2);
-                console.log(`Data (${data.length} bytes): ${formatResponse(data)}`);
+                const data = response.subarray(0, -2);
+                console.log(
+                    `Data (${data.length} bytes): ${formatResponse(data)}`
+                );
             }
         }
 
         card.disconnect(SCARD_LEAVE_CARD);
-
     } catch (err) {
-        console.error(`Error: ${err.message}`);
+        console.error(`Error: ${(err as Error).message}`);
     } finally {
         ctx.close();
     }
