@@ -903,3 +903,230 @@ describe('Package Exports (Issue #78)', () => {
         );
     });
 });
+
+describe('Get Connected Cards (Issue #80)', () => {
+    it('getCards should return empty map when no cards connected', async () => {
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+        const mockReader = new MockReader('ACR122U'); // No card
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        const cards = devices.getCards();
+        assert(cards instanceof Map, 'getCards should return a Map');
+        assert.strictEqual(cards.size, 0, 'Map should be empty when no cards');
+
+        devices.stop();
+    });
+
+    it('getCards should return connected cards by reader name', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]));
+        const mockReader = new MockReader('ACR122U', mockCard);
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        const cards = devices.getCards();
+        assert.strictEqual(cards.size, 1, 'Should have one card');
+        assert(cards.has('ACR122U'), 'Should be keyed by reader name');
+        const card = cards.get('ACR122U');
+        assert(card, 'Card should exist');
+        assert(card.atr!.equals(Buffer.from([0x3b, 0x8f])), 'Card should have correct ATR');
+
+        devices.stop();
+    });
+
+    it('getCards should return multiple cards from multiple readers', async () => {
+        const mockCard1 = new MockCard(1, Buffer.from([0x3b, 0x01]));
+        const mockCard2 = new MockCard(2, Buffer.from([0x3b, 0x02]));
+        const mockReader1 = new MockReader('Reader 1', mockCard1);
+        const mockReader2 = new MockReader('Reader 2', mockCard2);
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        mockContext.addReader(mockReader1);
+        mockContext.addReader(mockReader2);
+        mockMonitor.attachReader(mockReader1);
+        mockMonitor.attachReader(mockReader2);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        const cards = devices.getCards();
+        assert.strictEqual(cards.size, 2, 'Should have two cards');
+        assert(cards.has('Reader 1'), 'Should have card from Reader 1');
+        assert(cards.has('Reader 2'), 'Should have card from Reader 2');
+
+        devices.stop();
+    });
+
+    it('getCard should return null for unknown reader', async () => {
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        const card = devices.getCard('Unknown Reader');
+        assert.strictEqual(card, null, 'Should return null for unknown reader');
+
+        devices.stop();
+    });
+
+    it('getCard should return null for reader without card', async () => {
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+        const mockReader = new MockReader('ACR122U'); // No card
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        const card = devices.getCard('ACR122U');
+        assert.strictEqual(card, null, 'Should return null when reader has no card');
+
+        devices.stop();
+    });
+
+    it('getCard should return card for specific reader', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]));
+        const mockReader = new MockReader('ACR122U', mockCard);
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        const card = devices.getCard('ACR122U');
+        assert(card, 'Should return card');
+        assert(card.atr!.equals(Buffer.from([0x3b, 0x8f])), 'Card should have correct ATR');
+
+        devices.stop();
+    });
+
+    it('getCards should update when card is removed', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]));
+        const mockReader = new MockReader('ACR122U', mockCard);
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        assert.strictEqual(devices.getCards().size, 1, 'Should have one card initially');
+
+        mockMonitor.removeCard('ACR122U');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        assert.strictEqual(devices.getCards().size, 0, 'Should have no cards after removal');
+        assert.strictEqual(devices.getCard('ACR122U'), null, 'getCard should return null after removal');
+
+        devices.stop();
+    });
+
+    it('getCards should return empty map when not started', () => {
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const cards = devices.getCards();
+        assert(cards instanceof Map, 'getCards should return a Map');
+        assert.strictEqual(cards.size, 0, 'Map should be empty when not started');
+    });
+});

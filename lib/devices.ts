@@ -148,6 +148,30 @@ export class Devices extends EventEmitter {
     }
 
     /**
+     * Get all currently connected cards
+     * @returns Map of reader name to Card object
+     */
+    getCards(): Map<string, Card> {
+        const cards = new Map<string, Card>();
+        for (const [readerName, state] of this._readers) {
+            if (state.card) {
+                cards.set(readerName, state.card);
+            }
+        }
+        return cards;
+    }
+
+    /**
+     * Get the card connected to a specific reader
+     * @param readerName The name of the reader
+     * @returns The Card object if connected, or null
+     */
+    getCard(readerName: string): Card | null {
+        const state = this._readers.get(readerName);
+        return state?.card ?? null;
+    }
+
+    /**
      * Handle events from native monitor
      * Queues events to prevent race conditions when multiple events arrive concurrently
      */
