@@ -17,6 +17,7 @@
     "exports": {
         ".": {
             "types": "./dist/lib/index.d.ts",
+            "import": "./dist/lib/index.js",
             "require": "./dist/lib/index.js"
         }
     },
