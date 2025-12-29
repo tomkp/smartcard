@@ -339,6 +339,36 @@ describe('createTestSetup Helper', () => {
     });
 });
 
+describe('Devices addListener/removeListener (Issue #96)', () => {
+    it('addListener should register event handler', async () => {
+        const setup = createTestSetup();
+        const events: unknown[] = [];
+
+        setup.devices.addListener('reader-attached', (r: unknown) => events.push(r));
+        setup.devices.start();
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        assert.strictEqual(events.length, 1);
+        setup.devices.stop();
+    });
+
+    it('removeListener should unregister event handler', async () => {
+        const setup = createTestSetup();
+        const events: unknown[] = [];
+
+        const handler = (r: unknown) => events.push(r);
+        setup.devices.addListener('reader-attached', handler);
+        setup.devices.removeListener('reader-attached', handler);
+        setup.devices.start();
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        assert.strictEqual(events.length, 0, 'Handler should have been removed');
+        setup.devices.stop();
+    });
+});
+
 describe('MockDevices Integration', () => {
     it('should emit reader-attached events', async () => {
         const setup = createTestSetup({ readerName: 'ACR122U' });

@@ -372,6 +372,20 @@ export class Devices extends EventEmitter {
         return super.off(event, listener);
     }
 
+    addListener<K extends keyof DeviceEvents>(
+        event: K,
+        listener: DeviceEvents[K]
+    ): this {
+        return super.addListener(event, listener);
+    }
+
+    removeListener<K extends keyof DeviceEvents>(
+        event: K,
+        listener: DeviceEvents[K]
+    ): this {
+        return super.removeListener(event, listener);
+    }
+
     emit<K extends keyof DeviceEvents>(
         event: K,
         ...args: Parameters<DeviceEvents[K]>
