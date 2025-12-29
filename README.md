@@ -289,7 +289,7 @@ interface Card {
     readonly protocol: number;
     readonly connected: boolean;
     readonly atr: Buffer | null;
-    transmit(command: Buffer | number[], options?: { maxRecvLength?: number }): Promise<Buffer>;
+    transmit(command: Buffer | number[], options?: { maxRecvLength?: number; autoGetResponse?: boolean }): Promise<Buffer>;
     control(code: number, data?: Buffer): Promise<Buffer>;
     getStatus(): { state: number; protocol: number; atr: Buffer };
     disconnect(disposition?: number): void;
@@ -317,24 +317,32 @@ class Devices extends EventEmitter {
 }
 ```
 
-### transmitWithAutoResponse
+### Auto GET RESPONSE (T=0 Protocol)
 
-Helper function for T=0 protocol cards that automatically handles status words:
+For T=0 protocol cards, you can automatically handle status words by passing the `autoGetResponse` option:
 - `SW1=61`: Sends GET RESPONSE to retrieve remaining data
 - `SW1=6C`: Retries with corrected Le value
 
 ```javascript
-const { transmitWithAutoResponse } = require('smartcard');
-
 // Without auto-response (raw)
 const raw = await card.transmit([0x00, 0xA4, 0x04, 0x00, 0x0E, ...aid]);
 // Returns: 61 1C (meaning 28 more bytes available)
 
-// With auto-response
-const response = await transmitWithAutoResponse(card, [0x00, 0xA4, 0x04, 0x00, 0x0E, ...aid], {
+// With auto-response - handles 61 XX automatically
+const response = await card.transmit([0x00, 0xA4, 0x04, 0x00, 0x0E, ...aid], {
     autoGetResponse: true
 });
 // Returns: full response data + 90 00
+```
+
+The `transmitWithAutoResponse()` helper function is also available for low-level API usage:
+
+```javascript
+const { transmitWithAutoResponse } = require('smartcard');
+
+const response = await transmitWithAutoResponse(card, [0x00, 0xA4, 0x04, 0x00, 0x0E, ...aid], {
+    autoGetResponse: true
+});
 ```
 
 ### Control Codes
