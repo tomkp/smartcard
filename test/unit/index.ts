@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
     MockCard,
     MockReader,
@@ -865,5 +867,39 @@ describe('Control Code Constants', () => {
         assert.strictEqual(FEATURE_MODIFY_PIN_DIRECT, 0x07);
         assert.strictEqual(FEATURE_IFD_PIN_PROPERTIES, 0x0a);
         assert.strictEqual(FEATURE_GET_TLV_PROPERTIES, 0x12);
+    });
+});
+
+describe('Package Exports (Issue #78)', () => {
+    // Tests run from dist/test/unit/, so we need to go up 3 levels to reach the root
+    const packageJsonPath = resolve(__dirname, '../../../package.json');
+
+    it('should have import condition in exports for ESM support', () => {
+        const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
+
+        assert(packageJson.exports, 'exports field should exist');
+        assert(packageJson.exports['.'], 'exports["."] should exist');
+        assert(
+            packageJson.exports['.'].import,
+            'exports["."].import should exist for ESM support'
+        );
+        assert(
+            packageJson.exports['.'].require,
+            'exports["."].require should exist for CJS support'
+        );
+        assert(
+            packageJson.exports['.'].types,
+            'exports["."].types should exist for TypeScript support'
+        );
+    });
+
+    it('import and require should point to the same entry file', () => {
+        const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
+
+        assert.strictEqual(
+            packageJson.exports['.'].import,
+            packageJson.exports['.'].require,
+            'import and require conditions should point to same file'
+        );
     });
 });
