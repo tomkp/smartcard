@@ -508,6 +508,41 @@ describe('MockDevices Integration', () => {
     });
 });
 
+describe('isUnresponsiveCardError', () => {
+    const { isUnresponsiveCardError } = require('../../lib/devices');
+
+    it('should return true for unresponsive error message', () => {
+        const err = new Error('Card is unresponsive');
+        assert.strictEqual(isUnresponsiveCardError(err), true);
+    });
+
+    it('should return true for SCARD_W_UNRESPONSIVE_CARD message', () => {
+        const err = new Error('SCARD_W_UNRESPONSIVE_CARD');
+        assert.strictEqual(isUnresponsiveCardError(err), true);
+    });
+
+    it('should return true for case-insensitive match', () => {
+        const err = new Error('UNRESPONSIVE card detected');
+        assert.strictEqual(isUnresponsiveCardError(err), true);
+    });
+
+    it('should return false for other errors', () => {
+        const err = new Error('Sharing violation');
+        assert.strictEqual(isUnresponsiveCardError(err), false);
+    });
+
+    it('should return false for error without message', () => {
+        const err = new Error();
+        assert.strictEqual(isUnresponsiveCardError(err), false);
+    });
+
+    it('should return false for non-Error objects', () => {
+        assert.strictEqual(isUnresponsiveCardError('string error' as unknown as Error), false);
+        assert.strictEqual(isUnresponsiveCardError(null as unknown as Error), false);
+        assert.strictEqual(isUnresponsiveCardError(undefined as unknown as Error), false);
+    });
+});
+
 describe('Protocol Fallback (Issue #34)', () => {
     it('should fallback to T=0 when dual protocol fails with unresponsive error', async () => {
         const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]));

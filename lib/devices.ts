@@ -26,6 +26,17 @@ interface ReaderStateInternal {
 }
 
 /**
+ * Check if an error indicates an unresponsive card (SCARD_W_UNRESPONSIVE_CARD).
+ * Used to determine if we should fallback to T=0 protocol.
+ */
+export function isUnresponsiveCardError(err: Error): boolean {
+    if (!err || typeof err.message !== 'string') {
+        return false;
+    }
+    return err.message.toLowerCase().includes('unresponsive');
+}
+
+/**
  * High-level event-driven API for PC/SC devices
  *
  * Uses native ReaderMonitor for efficient background monitoring
@@ -292,13 +303,9 @@ export class Devices extends EventEmitter {
                         this._SCARD_PROTOCOL_T0 | this._SCARD_PROTOCOL_T1
                     );
                 } catch (dualProtocolErr) {
-                    // If dual protocol fails (e.g., SCARD_W_UNRESPONSIVE_CARD),
+                    // If dual protocol fails with unresponsive card error,
                     // fallback to T=0 only (issue #34)
-                    const err = dualProtocolErr as Error;
-                    if (
-                        err.message &&
-                        err.message.toLowerCase().includes('unresponsive')
-                    ) {
+                    if (isUnresponsiveCardError(dualProtocolErr as Error)) {
                         card = await reader.connect(
                             this._SCARD_SHARE_SHARED,
                             this._SCARD_PROTOCOL_T0
