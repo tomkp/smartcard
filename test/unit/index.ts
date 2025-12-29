@@ -870,6 +870,85 @@ describe('Control Code Constants', () => {
     });
 });
 
+describe('parseFeatures (Issue #86)', () => {
+    const { parseFeatures, FEATURE_VERIFY_PIN_DIRECT, FEATURE_MODIFY_PIN_DIRECT } = require('../../lib');
+
+    it('should return empty map for empty buffer', () => {
+        const features = parseFeatures(Buffer.alloc(0));
+        assert(features instanceof Map, 'Should return a Map');
+        assert.strictEqual(features.size, 0, 'Map should be empty');
+    });
+
+    it('should parse single feature TLV', () => {
+        // TLV: tag=0x06 (VERIFY_PIN_DIRECT), length=4, value=0x42000D48 (control code)
+        const tlv = Buffer.from([0x06, 0x04, 0x42, 0x00, 0x0D, 0x48]);
+        const features = parseFeatures(tlv);
+
+        assert.strictEqual(features.size, 1, 'Should have one feature');
+        assert(features.has(FEATURE_VERIFY_PIN_DIRECT), 'Should have VERIFY_PIN_DIRECT');
+        assert.strictEqual(features.get(FEATURE_VERIFY_PIN_DIRECT), 0x42000D48);
+    });
+
+    it('should parse multiple feature TLVs', () => {
+        // Two TLVs: VERIFY_PIN_DIRECT and MODIFY_PIN_DIRECT
+        const tlv = Buffer.from([
+            0x06, 0x04, 0x42, 0x00, 0x0D, 0x48, // VERIFY_PIN_DIRECT = 0x42000D48
+            0x07, 0x04, 0x42, 0x00, 0x0D, 0x4C, // MODIFY_PIN_DIRECT = 0x42000D4C
+        ]);
+        const features = parseFeatures(tlv);
+
+        assert.strictEqual(features.size, 2, 'Should have two features');
+        assert.strictEqual(features.get(FEATURE_VERIFY_PIN_DIRECT), 0x42000D48);
+        assert.strictEqual(features.get(FEATURE_MODIFY_PIN_DIRECT), 0x42000D4C);
+    });
+
+    it('should skip TLVs with non-4-byte length', () => {
+        // TLV with length=2 (not 4) should be skipped
+        const tlv = Buffer.from([
+            0x06, 0x02, 0x00, 0x00, // length=2, skip this
+            0x07, 0x04, 0x42, 0x00, 0x0D, 0x4C, // valid TLV
+        ]);
+        const features = parseFeatures(tlv);
+
+        assert.strictEqual(features.size, 1, 'Should have one feature (skipped invalid)');
+        assert(!features.has(FEATURE_VERIFY_PIN_DIRECT), 'Should not have skipped feature');
+        assert(features.has(FEATURE_MODIFY_PIN_DIRECT), 'Should have valid feature');
+    });
+
+    it('should handle truncated buffer gracefully', () => {
+        // Buffer too short to contain a full TLV
+        const tlv = Buffer.from([0x06, 0x04, 0x42]); // only 3 bytes after tag+length
+        const features = parseFeatures(tlv);
+
+        assert.strictEqual(features.size, 0, 'Should return empty map for truncated buffer');
+    });
+
+    it('should handle buffer shorter than minimum TLV', () => {
+        // Less than 4 bytes (minimum for tag + length + 2 bytes)
+        const tlv = Buffer.from([0x06, 0x04]);
+        const features = parseFeatures(tlv);
+
+        assert.strictEqual(features.size, 0, 'Should return empty map');
+    });
+
+    it('should parse real-world CCID response', () => {
+        // Simulated response from a real pinpad reader
+        const tlv = Buffer.from([
+            0x06, 0x04, 0x42, 0x33, 0x00, 0x06, // VERIFY_PIN_DIRECT
+            0x07, 0x04, 0x42, 0x33, 0x00, 0x07, // MODIFY_PIN_DIRECT
+            0x0a, 0x04, 0x42, 0x33, 0x00, 0x0a, // IFD_PIN_PROPERTIES
+            0x12, 0x04, 0x42, 0x33, 0x00, 0x12, // GET_TLV_PROPERTIES
+        ]);
+        const features = parseFeatures(tlv);
+
+        assert.strictEqual(features.size, 4, 'Should have 4 features');
+        assert.strictEqual(features.get(0x06), 0x42330006);
+        assert.strictEqual(features.get(0x07), 0x42330007);
+        assert.strictEqual(features.get(0x0a), 0x4233000a);
+        assert.strictEqual(features.get(0x12), 0x42330012);
+    });
+});
+
 describe('Package Exports (Issue #78)', () => {
     // Tests run from dist/test/unit/, so we need to go up 3 levels to reach the root
     const packageJsonPath = resolve(__dirname, '../../../package.json');
