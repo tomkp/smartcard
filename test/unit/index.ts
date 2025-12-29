@@ -8,6 +8,7 @@ import {
     MockContext,
     MockReaderMonitor,
     createMockDevices,
+    createTestSetup,
     UnresponsiveDualProtocolReader,
     FailingMockReader,
     SlowMockReader,
@@ -296,32 +297,58 @@ describe('MockReaderMonitor', () => {
     });
 });
 
-describe('MockDevices Integration', () => {
-    it('should emit reader-attached events', async () => {
-        const mockContext = new MockContext();
-        const mockMonitor = new MockReaderMonitor();
-        const mockReader = new MockReader('ACR122U');
+describe('createTestSetup Helper', () => {
+    it('should create a complete test setup with defaults', () => {
+        const setup = createTestSetup();
 
-        mockContext.addReader(mockReader);
-        mockMonitor.attachReader(mockReader);
+        assert(setup.devices, 'Should have devices');
+        assert(setup.context, 'Should have context');
+        assert(setup.monitor, 'Should have monitor');
+        assert(setup.reader, 'Should have reader');
+        assert(setup.card, 'Should have card');
+        assert.strictEqual(setup.reader.name, 'Test Reader');
+    });
 
-        const MockDevices = createMockDevices({
-            Context: function () {
-                return mockContext;
-            } as unknown as new () => MockContext,
-            ReaderMonitor: function () {
-                return mockMonitor;
-            } as unknown as new () => MockReaderMonitor,
+    it('should allow custom reader name', () => {
+        const setup = createTestSetup({ readerName: 'Custom Reader' });
+        assert.strictEqual(setup.reader.name, 'Custom Reader');
+    });
+
+    it('should allow custom card responses', async () => {
+        const setup = createTestSetup({
+            cardResponses: [
+                { command: [0xff, 0xca, 0x00, 0x00, 0x00], response: [0x01, 0x02, 0x90, 0x00] }
+            ]
         });
 
-        const devices = new MockDevices();
+        const response = await setup.card.transmit(Buffer.from([0xff, 0xca, 0x00, 0x00, 0x00]));
+        assert.deepStrictEqual(response, Buffer.from([0x01, 0x02, 0x90, 0x00]));
+    });
+
+    it('should emit events when started', async () => {
+        const setup = createTestSetup();
+        const events: unknown[] = [];
+
+        setup.devices.on('reader-attached', (r: unknown) => events.push(r));
+        setup.devices.start();
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        assert.strictEqual(events.length, 1);
+        setup.devices.stop();
+    });
+});
+
+describe('MockDevices Integration', () => {
+    it('should emit reader-attached events', async () => {
+        const setup = createTestSetup({ readerName: 'ACR122U' });
         const events: { type: string; reader: { name: string } }[] = [];
 
-        devices.on('reader-attached', (reader: { name: string }) =>
+        setup.devices.on('reader-attached', (reader: { name: string }) =>
             events.push({ type: 'reader-attached', reader })
         );
 
-        devices.start();
+        setup.devices.start();
 
         await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -329,7 +356,7 @@ describe('MockDevices Integration', () => {
         assert.strictEqual(events[0].type, 'reader-attached');
         assert.strictEqual(events[0].reader.name, 'ACR122U');
 
-        devices.stop();
+        setup.devices.stop();
     });
 
     it('should emit card-inserted events with card object', async () => {
