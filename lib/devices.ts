@@ -11,6 +11,7 @@ import type {
     ReaderMonitor,
     ReaderMonitorConstructor,
 } from './types';
+import { wrapCard } from './card-wrapper';
 
 const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
 
@@ -289,10 +290,10 @@ export class Devices extends EventEmitter {
             const reader = readers.find((r) => r.name === readerName);
 
             if (reader) {
-                let card: Card;
+                let nativeCard: Card;
                 try {
                     // First try with both T=0 and T=1 protocols
-                    card = await reader.connect(
+                    nativeCard = await reader.connect(
                         this._SCARD_SHARE_SHARED,
                         this._SCARD_PROTOCOL_T0 | this._SCARD_PROTOCOL_T1
                     );
@@ -300,7 +301,7 @@ export class Devices extends EventEmitter {
                     // If dual protocol fails with unresponsive card error,
                     // fallback to T=0 only (issue #34)
                     if (isUnresponsiveCardError(dualProtocolErr as Error)) {
-                        card = await reader.connect(
+                        nativeCard = await reader.connect(
                             this._SCARD_SHARE_SHARED,
                             this._SCARD_PROTOCOL_T0
                         );
@@ -310,6 +311,8 @@ export class Devices extends EventEmitter {
                     }
                 }
 
+                // Wrap the native card to add autoGetResponse support
+                const card = wrapCard(nativeCard);
                 state.card = card;
 
                 this.emit('card-inserted', {
