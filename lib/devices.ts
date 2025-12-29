@@ -154,9 +154,9 @@ export class Devices extends EventEmitter {
 
     /**
      * Get all currently connected cards
-     * @returns Map of reader name to Card object
+     * @returns ReadonlyMap of reader name to Card object
      */
-    getCards(): Map<string, Card> {
+    getCards(): ReadonlyMap<string, Card> {
         const cards = new Map<string, Card>();
         for (const [readerName, state] of this._readers) {
             if (state.card) {
