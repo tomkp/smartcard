@@ -1059,6 +1059,54 @@ describe('parseFeatures (Issue #86)', () => {
     });
 });
 
+describe('APDU Building Utilities (Issue #98)', () => {
+    const { buildGetResponseCommand, correctLeInCommand } = require('../../lib');
+
+    describe('buildGetResponseCommand', () => {
+        it('should build GET RESPONSE with Le=0x1C', () => {
+            const cmd = buildGetResponseCommand(0x1c);
+            assert.deepStrictEqual(cmd, Buffer.from([0x00, 0xc0, 0x00, 0x00, 0x1c]));
+        });
+
+        it('should build GET RESPONSE with Le=0x00 (256 bytes)', () => {
+            const cmd = buildGetResponseCommand(0x00);
+            assert.deepStrictEqual(cmd, Buffer.from([0x00, 0xc0, 0x00, 0x00, 0x00]));
+        });
+
+        it('should build GET RESPONSE with Le=0xFF', () => {
+            const cmd = buildGetResponseCommand(0xff);
+            assert.deepStrictEqual(cmd, Buffer.from([0x00, 0xc0, 0x00, 0x00, 0xff]));
+        });
+    });
+
+    describe('correctLeInCommand', () => {
+        it('should append Le to Case 1 command (4 bytes, no Le)', () => {
+            const cmd = Buffer.from([0x00, 0xa4, 0x04, 0x00]);
+            const corrected = correctLeInCommand(cmd, 0x10);
+            assert.deepStrictEqual(corrected, Buffer.from([0x00, 0xa4, 0x04, 0x00, 0x10]));
+        });
+
+        it('should replace Le in Case 2 command (5 bytes, Le at end)', () => {
+            const cmd = Buffer.from([0x00, 0xb0, 0x00, 0x00, 0xff]);
+            const corrected = correctLeInCommand(cmd, 0x20);
+            assert.deepStrictEqual(corrected, Buffer.from([0x00, 0xb0, 0x00, 0x00, 0x20]));
+        });
+
+        it('should replace Le in Case 3/4 command (Lc + data + Le)', () => {
+            const cmd = Buffer.from([0x00, 0xa4, 0x04, 0x00, 0x02, 0xab, 0xcd, 0x00]);
+            const corrected = correctLeInCommand(cmd, 0x30);
+            assert.deepStrictEqual(corrected, Buffer.from([0x00, 0xa4, 0x04, 0x00, 0x02, 0xab, 0xcd, 0x30]));
+        });
+
+        it('should not modify original command buffer', () => {
+            const cmd = Buffer.from([0x00, 0xb0, 0x00, 0x00, 0xff]);
+            const original = Buffer.from(cmd);
+            correctLeInCommand(cmd, 0x20);
+            assert.deepStrictEqual(cmd, original, 'Original should not be modified');
+        });
+    });
+});
+
 describe('Package Exports (Issue #78)', () => {
     // Tests run from dist/test/unit/, so we need to go up 3 levels to reach the root
     const packageJsonPath = resolve(__dirname, '../../../package.json');
