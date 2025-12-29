@@ -37,7 +37,8 @@ export interface TransmitOptions {
      * - SW1=61: Send GET RESPONSE to retrieve remaining data
      * - SW1=6C: Retry with corrected Le value
      *
-     * Only applicable when using transmitWithAutoResponse().
+     * Works with both card.transmit() (when using Devices high-level API)
+     * and transmitWithAutoResponse() function.
      * Default: false (raw responses returned)
      */
     autoGetResponse?: boolean;

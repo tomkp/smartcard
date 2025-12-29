@@ -1603,3 +1603,174 @@ describe('Auto GET RESPONSE (Issue #82)', () => {
         assert(response.equals(Buffer.from([0x03, 0x90, 0x00])));
     });
 });
+
+describe('card.transmit() autoGetResponse option (Issue #105)', () => {
+    it('should handle SW1=61 when autoGetResponse option is passed to card.transmit()', async () => {
+        // Mock card that returns 61 1C (28 more bytes) then the data
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            // Initial command returns SW1=61 with 28 bytes remaining
+            {
+                command: [0x00, 0xa4, 0x04, 0x00, 0x0e],
+                response: [0x61, 0x1c],
+            },
+            // GET RESPONSE command returns data + 90 00
+            {
+                command: [0x00, 0xc0, 0x00, 0x00, 0x1c],
+                response: [
+                    0x6f, 0x1a, 0x84, 0x0e, 0x31, 0x50, 0x41, 0x59,
+                    0x2e, 0x53, 0x59, 0x53, 0x2e, 0x44, 0x44, 0x46,
+                    0x30, 0x31, 0xa5, 0x08, 0x88, 0x01, 0x01, 0x5f,
+                    0x2d, 0x02, 0x65, 0x6e, 0x90, 0x00,
+                ],
+            },
+        ]);
+        const mockReader = new MockReader('Test Reader', mockCard);
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const cardEvents: { card: Card }[] = [];
+
+        devices.on('card-inserted', (event: { reader: ReaderEventInfo; card: Card }) =>
+            cardEvents.push(event)
+        );
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        assert.strictEqual(cardEvents.length, 1, 'Should have card-inserted event');
+        const card = cardEvents[0].card;
+
+        // This should work - autoGetResponse passed directly to card.transmit()
+        const response = await card.transmit(
+            [0x00, 0xa4, 0x04, 0x00, 0x0e],
+            { autoGetResponse: true }
+        );
+
+        // Should have sent 2 commands (initial + GET RESPONSE)
+        assert.strictEqual(mockCard.transmitCount, 2, 'Should have sent 2 commands');
+
+        // Response should be data (28 bytes) + 90 00
+        assert.strictEqual(response.length, 30, 'Response should be 30 bytes');
+        assert.strictEqual(response[response.length - 2], 0x90);
+        assert.strictEqual(response[response.length - 1], 0x00);
+
+        devices.stop();
+    });
+
+    it('should handle SW1=6C when autoGetResponse option is passed to card.transmit()', async () => {
+        // Mock card that returns 6C 10 (wrong Le) then succeeds
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            {
+                command: [0x00, 0xb2, 0x01, 0x0c, 0x00],
+                response: [0x6c, 0x10],
+            },
+            {
+                command: [0x00, 0xb2, 0x01, 0x0c, 0x10],
+                response: [
+                    0x70, 0x0e, 0x9f, 0x0a, 0x08, 0x01, 0x02, 0x03,
+                    0x04, 0x05, 0x06, 0x07, 0x08, 0x9f, 0x09, 0x02,
+                    0x90, 0x00,
+                ],
+            },
+        ]);
+        const mockReader = new MockReader('Test Reader', mockCard);
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const cardEvents: { card: Card }[] = [];
+
+        devices.on('card-inserted', (event: { reader: ReaderEventInfo; card: Card }) =>
+            cardEvents.push(event)
+        );
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        const card = cardEvents[0].card;
+
+        // This should work - autoGetResponse passed directly to card.transmit()
+        const response = await card.transmit(
+            [0x00, 0xb2, 0x01, 0x0c, 0x00],
+            { autoGetResponse: true }
+        );
+
+        // Should have sent 2 commands
+        assert.strictEqual(mockCard.transmitCount, 2, 'Should have sent 2 commands');
+
+        // Response should be successful
+        assert.strictEqual(response[response.length - 2], 0x90);
+        assert.strictEqual(response[response.length - 1], 0x00);
+
+        devices.stop();
+    });
+
+    it('should return raw response when autoGetResponse is not specified', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            {
+                command: [0x00, 0xa4, 0x04, 0x00, 0x0e],
+                response: [0x61, 0x1c],
+            },
+        ]);
+        const mockReader = new MockReader('Test Reader', mockCard);
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const cardEvents: { card: Card }[] = [];
+
+        devices.on('card-inserted', (event: { reader: ReaderEventInfo; card: Card }) =>
+            cardEvents.push(event)
+        );
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        const card = cardEvents[0].card;
+
+        // Without autoGetResponse, should return raw 61 XX
+        const response = await card.transmit([0x00, 0xa4, 0x04, 0x00, 0x0e]);
+
+        assert.strictEqual(mockCard.transmitCount, 1, 'Should only transmit once');
+        assert(response.equals(Buffer.from([0x61, 0x1c])), 'Should return raw response');
+
+        devices.stop();
+    });
+});

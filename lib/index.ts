@@ -50,6 +50,9 @@ export {
     correctLeInCommand,
 } from './t0-handler';
 
+// Import and re-export card wrapper for low-level API users
+export { CardWrapper, wrapCard } from './card-wrapper';
+
 // Import and re-export error classes
 export {
     PCSCError,
