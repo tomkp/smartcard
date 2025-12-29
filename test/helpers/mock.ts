@@ -374,6 +374,57 @@ export function createMockDevices(mockAddon: MockAddon): typeof Devices {
 export const SCARD_PROTOCOL_T0 = 1;
 export const SCARD_PROTOCOL_T1 = 2;
 
+export interface TestSetup {
+    devices: InstanceType<typeof Devices>;
+    context: MockContext;
+    monitor: MockReaderMonitor;
+    reader: MockReader;
+    card: MockCard;
+}
+
+export interface TestSetupOptions {
+    readerName?: string;
+    cardProtocol?: number;
+    cardAtr?: Buffer;
+    cardResponses?: MockCardResponse[];
+    ReaderClass?: new (name: string, card: MockCard | null) => MockReader;
+}
+
+/**
+ * Create a complete test setup with mock devices, context, monitor, reader, and card.
+ * Reduces boilerplate in unit tests.
+ */
+export function createTestSetup(options: TestSetupOptions = {}): TestSetup {
+    const {
+        readerName = 'Test Reader',
+        cardProtocol = SCARD_PROTOCOL_T0,
+        cardAtr = Buffer.from([0x3b, 0x8f]),
+        cardResponses = [],
+        ReaderClass = MockReader,
+    } = options;
+
+    const card = new MockCard(cardProtocol, cardAtr, cardResponses);
+    const reader = new ReaderClass(readerName, card);
+    const context = new MockContext();
+    const monitor = new MockReaderMonitor();
+
+    context.addReader(reader);
+    monitor.attachReader(reader);
+
+    const MockDevicesClass = createMockDevices({
+        Context: function () {
+            return context;
+        } as unknown as new () => MockContext,
+        ReaderMonitor: function () {
+            return monitor;
+        } as unknown as new () => MockReaderMonitor,
+    });
+
+    const devices = new MockDevicesClass();
+
+    return { devices, context, monitor, reader, card };
+}
+
 /**
  * A mock reader that fails with "unresponsive" error on dual protocol (T0|T1)
  * but succeeds when connecting with T0 only (simulates issue #34 fallback)
