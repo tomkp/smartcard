@@ -1,13 +1,17 @@
+import type {
+    ContextConstructor,
+    NativeAddon,
+    ReaderMonitorConstructor,
+} from './types';
+
 // Load native addon
-const addon = require('../../build/Release/smartcard_napi.node') as import('./types').NativeAddon;
+const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
 
 // Re-export native classes
-export const Context =
-    addon.Context as import('./types').ContextConstructor;
+export const Context = addon.Context as ContextConstructor;
 export const Reader = addon.Reader;
 export const Card = addon.Card;
-export const ReaderMonitor =
-    addon.ReaderMonitor as import('./types').ReaderMonitorConstructor;
+export const ReaderMonitor = addon.ReaderMonitor as ReaderMonitorConstructor;
 
 // Re-export constants
 export const SCARD_SHARE_EXCLUSIVE = addon.SCARD_SHARE_EXCLUSIVE;
