@@ -306,7 +306,7 @@ class Devices extends EventEmitter {
     start(): void;
     stop(): void;
     listReaders(): Reader[];
-    getCards(): Map<string, Card>;      // Get all connected cards by reader name
+    getCards(): ReadonlyMap<string, Card>;  // Get all connected cards by reader name
     getCard(readerName: string): Card | null;  // Get card for specific reader
 
     on(event: 'reader-attached', listener: (reader: Reader) => void): this;
