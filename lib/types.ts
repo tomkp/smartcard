@@ -31,6 +31,16 @@ export interface TransmitOptions {
      * Maximum: 262144 (256KB for extended APDUs)
      */
     maxRecvLength?: number;
+
+    /**
+     * Automatically handle T=0 protocol status words:
+     * - SW1=61: Send GET RESPONSE to retrieve remaining data
+     * - SW1=6C: Retry with corrected Le value
+     *
+     * Only applicable when using transmitWithAutoResponse().
+     * Default: false (raw responses returned)
+     */
+    autoGetResponse?: boolean;
 }
 
 /**
