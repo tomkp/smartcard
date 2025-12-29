@@ -6,19 +6,13 @@ import type {
     DeviceEvents,
     DevicesOptions,
     MonitorEvent,
+    NativeAddon,
     Reader,
     ReaderMonitor,
     ReaderMonitorConstructor,
 } from './types';
 
-const addon = require('../../build/Release/smartcard_napi.node') as {
-    Context: ContextConstructor;
-    ReaderMonitor: ReaderMonitorConstructor;
-    SCARD_STATE_PRESENT: number;
-    SCARD_SHARE_SHARED: number;
-    SCARD_PROTOCOL_T0: number;
-    SCARD_PROTOCOL_T1: number;
-};
+const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
 
 interface ReaderStateInternal {
     hasCard: boolean;
