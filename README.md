@@ -306,6 +306,8 @@ class Devices extends EventEmitter {
     start(): void;
     stop(): void;
     listReaders(): Reader[];
+    getCards(): Map<string, Card>;      // Get all connected cards by reader name
+    getCard(readerName: string): Card | null;  // Get card for specific reader
 
     on(event: 'reader-attached', listener: (reader: Reader) => void): this;
     on(event: 'reader-detached', listener: (reader: Reader) => void): this;
@@ -313,6 +315,52 @@ class Devices extends EventEmitter {
     on(event: 'card-removed', listener: (event: { reader: Reader; card: Card | null }) => void): this;
     on(event: 'error', listener: (error: Error) => void): this;
 }
+```
+
+### transmitWithAutoResponse
+
+Helper function for T=0 protocol cards that automatically handles status words:
+- `SW1=61`: Sends GET RESPONSE to retrieve remaining data
+- `SW1=6C`: Retries with corrected Le value
+
+```javascript
+const { transmitWithAutoResponse } = require('smartcard');
+
+// Without auto-response (raw)
+const raw = await card.transmit([0x00, 0xA4, 0x04, 0x00, 0x0E, ...aid]);
+// Returns: 61 1C (meaning 28 more bytes available)
+
+// With auto-response
+const response = await transmitWithAutoResponse(card, [0x00, 0xA4, 0x04, 0x00, 0x0E, ...aid], {
+    autoGetResponse: true
+});
+// Returns: full response data + 90 00
+```
+
+### Control Codes
+
+Utilities for reader control commands (e.g., PIN verification on pinpad readers).
+
+```javascript
+const {
+    SCARD_CTL_CODE,
+    CM_IOCTL_GET_FEATURE_REQUEST,
+    parseFeatures,
+    FEATURE_VERIFY_PIN_DIRECT,
+    FEATURE_MODIFY_PIN_DIRECT
+} = require('smartcard');
+
+// Get supported features from reader
+const featureResponse = await card.control(CM_IOCTL_GET_FEATURE_REQUEST);
+const features = parseFeatures(featureResponse);
+
+if (features.has(FEATURE_VERIFY_PIN_DIRECT)) {
+    const pinVerifyCode = features.get(FEATURE_VERIFY_PIN_DIRECT);
+    // Use pinVerifyCode with card.control() for PIN verification
+}
+
+// Generate platform-specific control code
+const customCode = SCARD_CTL_CODE(3500);
 ```
 
 ### Constants
@@ -338,6 +386,16 @@ SCARD_EJECT_CARD       // Eject the card
 SCARD_STATE_PRESENT    // Card is present
 SCARD_STATE_EMPTY      // No card in reader
 SCARD_STATE_CHANGED    // State has changed
+// ... and more
+
+// CCID Feature constants
+FEATURE_VERIFY_PIN_START      // 0x01
+FEATURE_VERIFY_PIN_FINISH     // 0x02
+FEATURE_MODIFY_PIN_START      // 0x03
+FEATURE_MODIFY_PIN_FINISH     // 0x04
+FEATURE_GET_KEY_PRESSED       // 0x05
+FEATURE_VERIFY_PIN_DIRECT     // 0x06
+FEATURE_MODIFY_PIN_DIRECT     // 0x07
 // ... and more
 ```
 
