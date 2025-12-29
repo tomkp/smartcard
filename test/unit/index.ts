@@ -1130,3 +1130,239 @@ describe('Get Connected Cards (Issue #80)', () => {
         assert.strictEqual(cards.size, 0, 'Map should be empty when not started');
     });
 });
+
+describe('Auto GET RESPONSE (Issue #82)', () => {
+    it('transmitWithAutoResponse should handle SW1=61 by sending GET RESPONSE', async () => {
+        const { transmitWithAutoResponse } = require('../../lib/t0-handler');
+
+        // Mock card that returns 61 1C (28 more bytes) then the data
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            // Initial command returns SW1=61 with 28 bytes remaining
+            {
+                command: [0x00, 0xa4, 0x04, 0x00, 0x0e],
+                response: [0x61, 0x1c],
+            },
+            // GET RESPONSE command returns data + 90 00
+            {
+                command: [0x00, 0xc0, 0x00, 0x00, 0x1c],
+                response: [
+                    0x6f, 0x1a, 0x84, 0x0e, 0x31, 0x50, 0x41, 0x59,
+                    0x2e, 0x53, 0x59, 0x53, 0x2e, 0x44, 0x44, 0x46,
+                    0x30, 0x31, 0xa5, 0x08, 0x88, 0x01, 0x01, 0x5f,
+                    0x2d, 0x02, 0x65, 0x6e, 0x90, 0x00,
+                ],
+            },
+        ]);
+
+        const response = await transmitWithAutoResponse(
+            mockCard,
+            [0x00, 0xa4, 0x04, 0x00, 0x0e],
+            { autoGetResponse: true }
+        );
+
+        // Should have sent 2 commands
+        assert.strictEqual(mockCard.transmitCount, 2);
+
+        // Response should be data (28 bytes) + 90 00
+        assert.strictEqual(response.length, 30);
+        assert.strictEqual(response[response.length - 2], 0x90);
+        assert.strictEqual(response[response.length - 1], 0x00);
+    });
+
+    it('transmitWithAutoResponse should handle SW1=6C by retrying with correct Le', async () => {
+        const { transmitWithAutoResponse } = require('../../lib/t0-handler');
+
+        // Mock card that returns 6C 10 (wrong Le, should use 16) then succeeds
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            // Initial command with Le=00 returns 6C 10
+            {
+                command: [0x00, 0xb2, 0x01, 0x0c, 0x00],
+                response: [0x6c, 0x10],
+            },
+            // Retry with Le=10 succeeds
+            {
+                command: [0x00, 0xb2, 0x01, 0x0c, 0x10],
+                response: [
+                    0x70, 0x0e, 0x9f, 0x0a, 0x08, 0x01, 0x02, 0x03,
+                    0x04, 0x05, 0x06, 0x07, 0x08, 0x9f, 0x09, 0x02,
+                    0x90, 0x00,
+                ],
+            },
+        ]);
+
+        const response = await transmitWithAutoResponse(
+            mockCard,
+            [0x00, 0xb2, 0x01, 0x0c, 0x00],
+            { autoGetResponse: true }
+        );
+
+        // Should have sent 2 commands
+        assert.strictEqual(mockCard.transmitCount, 2);
+
+        // Response should be the successful data
+        assert.strictEqual(response[response.length - 2], 0x90);
+        assert.strictEqual(response[response.length - 1], 0x00);
+    });
+
+    it('transmitWithAutoResponse should handle chained SW1=61 responses', async () => {
+        const { transmitWithAutoResponse } = require('../../lib/t0-handler');
+
+        // Mock card that returns multiple 61 XX responses
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            // Initial command
+            {
+                command: [0x00, 0xca, 0x00, 0x00, 0x00],
+                response: [0x61, 0x10],
+            },
+            // First GET RESPONSE - returns more data available
+            {
+                command: [0x00, 0xc0, 0x00, 0x00, 0x10],
+                response: [
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+                    0x61, 0x08,
+                ],
+            },
+            // Second GET RESPONSE - final data
+            {
+                command: [0x00, 0xc0, 0x00, 0x00, 0x08],
+                response: [0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x90, 0x00],
+            },
+        ]);
+
+        const response = await transmitWithAutoResponse(
+            mockCard,
+            [0x00, 0xca, 0x00, 0x00, 0x00],
+            { autoGetResponse: true }
+        );
+
+        // Should have sent 3 commands
+        assert.strictEqual(mockCard.transmitCount, 3);
+
+        // Response should be all data concatenated + 90 00
+        assert.strictEqual(response.length, 26); // 16 + 8 + 2
+        assert.strictEqual(response[0], 0x01);
+        assert.strictEqual(response[15], 0x10);
+        assert.strictEqual(response[16], 0x11);
+        assert.strictEqual(response[23], 0x18);
+        assert.strictEqual(response[response.length - 2], 0x90);
+        assert.strictEqual(response[response.length - 1], 0x00);
+    });
+
+    it('transmitWithAutoResponse should pass through normal responses unchanged', async () => {
+        const { transmitWithAutoResponse } = require('../../lib/t0-handler');
+
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            {
+                command: [0xff, 0xca, 0x00, 0x00, 0x00],
+                response: [0x04, 0xa2, 0x3b, 0x7a, 0x90, 0x00],
+            },
+        ]);
+
+        const response = await transmitWithAutoResponse(
+            mockCard,
+            [0xff, 0xca, 0x00, 0x00, 0x00],
+            { autoGetResponse: true }
+        );
+
+        // Should only transmit once
+        assert.strictEqual(mockCard.transmitCount, 1);
+
+        // Response unchanged
+        assert(response.equals(Buffer.from([0x04, 0xa2, 0x3b, 0x7a, 0x90, 0x00])));
+    });
+
+    it('transmitWithAutoResponse should skip handling when autoGetResponse is false', async () => {
+        const { transmitWithAutoResponse } = require('../../lib/t0-handler');
+
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            {
+                command: [0x00, 0xa4, 0x04, 0x00, 0x0e],
+                response: [0x61, 0x1c],
+            },
+        ]);
+
+        const response = await transmitWithAutoResponse(
+            mockCard,
+            [0x00, 0xa4, 0x04, 0x00, 0x0e],
+            { autoGetResponse: false }
+        );
+
+        // Should only transmit once - no automatic GET RESPONSE
+        assert.strictEqual(mockCard.transmitCount, 1);
+
+        // Response unchanged (raw 61 1C)
+        assert(response.equals(Buffer.from([0x61, 0x1c])));
+    });
+
+    it('transmitWithAutoResponse should skip handling when autoGetResponse is not specified', async () => {
+        const { transmitWithAutoResponse } = require('../../lib/t0-handler');
+
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            {
+                command: [0x00, 0xa4, 0x04, 0x00, 0x0e],
+                response: [0x61, 0x1c],
+            },
+        ]);
+
+        const response = await transmitWithAutoResponse(
+            mockCard,
+            [0x00, 0xa4, 0x04, 0x00, 0x0e],
+            {}
+        );
+
+        // Should only transmit once
+        assert.strictEqual(mockCard.transmitCount, 1);
+
+        // Response unchanged (raw 61 1C)
+        assert(response.equals(Buffer.from([0x61, 0x1c])));
+    });
+
+    it('transmitWithAutoResponse should pass through error status words', async () => {
+        const { transmitWithAutoResponse } = require('../../lib/t0-handler');
+
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            {
+                command: [0x00, 0xa4, 0x04, 0x00, 0x0e],
+                response: [0x6a, 0x82], // File not found
+            },
+        ]);
+
+        const response = await transmitWithAutoResponse(
+            mockCard,
+            [0x00, 0xa4, 0x04, 0x00, 0x0e],
+            { autoGetResponse: true }
+        );
+
+        // Should only transmit once
+        assert.strictEqual(mockCard.transmitCount, 1);
+
+        // Error response unchanged
+        assert(response.equals(Buffer.from([0x6a, 0x82])));
+    });
+
+    it('transmitWithAutoResponse should handle SW1=6C with empty original Le', async () => {
+        const { transmitWithAutoResponse } = require('../../lib/t0-handler');
+
+        // 4-byte command (no Le byte)
+        const mockCard = new MockCard(1, Buffer.from([0x3b, 0x8f]), [
+            {
+                command: [0x00, 0xca, 0x9f, 0x17],
+                response: [0x6c, 0x01],
+            },
+            {
+                command: [0x00, 0xca, 0x9f, 0x17, 0x01],
+                response: [0x03, 0x90, 0x00],
+            },
+        ]);
+
+        const response = await transmitWithAutoResponse(
+            mockCard,
+            [0x00, 0xca, 0x9f, 0x17],
+            { autoGetResponse: true }
+        );
+
+        assert.strictEqual(mockCard.transmitCount, 2);
+        assert(response.equals(Buffer.from([0x03, 0x90, 0x00])));
+    });
+});

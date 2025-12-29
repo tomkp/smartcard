@@ -39,6 +39,9 @@ export const SCARD_STATE_MUTE = addon.SCARD_STATE_MUTE;
 // Import and re-export Devices class
 export { Devices } from './devices';
 
+// Import and re-export T=0 protocol handler
+export { transmitWithAutoResponse } from './t0-handler';
+
 // Import and re-export error classes
 export {
     PCSCError,
