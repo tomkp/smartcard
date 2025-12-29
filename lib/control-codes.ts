@@ -47,11 +47,16 @@ export function parseFeatures(response: Buffer): Map<number, number> {
     const features = new Map<number, number>();
     let offset = 0;
 
-    while (offset + 4 <= response.length) {
+    while (offset + 2 <= response.length) {
         const tag = response[offset];
         const length = response[offset + 1];
 
-        if (length === 4 && offset + 2 + length <= response.length) {
+        // Validate length doesn't exceed remaining buffer
+        if (offset + 2 + length > response.length) {
+            break;
+        }
+
+        if (length === 4) {
             // Big-endian control code
             const controlCode =
                 (response[offset + 2] << 24) |

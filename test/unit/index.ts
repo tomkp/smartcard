@@ -947,6 +947,24 @@ describe('parseFeatures (Issue #86)', () => {
         assert.strictEqual(features.get(0x0a), 0x4233000a);
         assert.strictEqual(features.get(0x12), 0x42330012);
     });
+
+    it('should not read beyond buffer with malformed length field', () => {
+        // TLV with length=255 (would read way beyond buffer if not validated)
+        const tlv = Buffer.from([0x06, 0xff, 0x42, 0x00, 0x0D, 0x48]);
+        const features = parseFeatures(tlv);
+
+        // Should safely skip this malformed entry and not crash
+        assert.strictEqual(features.size, 0, 'Should return empty map for malformed length');
+    });
+
+    it('should handle length that exactly exceeds remaining bytes', () => {
+        // TLV says length=6 but only 4 bytes remain
+        const tlv = Buffer.from([0x06, 0x06, 0x42, 0x00, 0x0D, 0x48]);
+        const features = parseFeatures(tlv);
+
+        // length != 4, so should be skipped anyway
+        assert.strictEqual(features.size, 0, 'Should skip non-4 length entries');
+    });
 });
 
 describe('Package Exports (Issue #78)', () => {
