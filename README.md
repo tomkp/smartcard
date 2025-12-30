@@ -517,3 +517,4 @@ MIT
 ## Related Projects
 
 - [nfc-pcsc](https://www.npmjs.com/package/nfc-pcsc) - NFC library built on smartcard
+- [emv](https://github.com/tomkp/emv) - EMV (Europay, MasterCard, Visa) parsing library for payment card applications. Use it alongside smartcard to parse TLV data, handle application selection, and build payment terminal applications.
