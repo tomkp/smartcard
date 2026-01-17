@@ -1,8 +1,12 @@
 #include "reader_monitor.h"
 #include "pcsc_errors.h"
 #include <cstring>
+#include <unordered_map>
 
 Napi::FunctionReference ReaderMonitor::constructor;
+
+// Number of iterations between forced full state refreshes (Windows reliability fix)
+static const int STATE_REFRESH_INTERVAL = 10;
 
 // Event data passed from worker thread to JS thread
 struct EventData {
@@ -123,7 +127,7 @@ Napi::Value ReaderMonitor::Stop(const Napi::CallbackInfo& info) {
         context_ = 0;
     }
 
-    readers_.clear();
+    readerStates_.clear();
 
     return env.Undefined();
 }
@@ -139,28 +143,84 @@ void ReaderMonitor::MonitorLoop() {
     // Emit reader-attached events for all pre-existing readers (Issue #30)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        for (const auto& reader : readers_) {
-            EmitEvent("reader-attached", reader.name, reader.lastState, reader.atr);
+        for (const auto& pair : readerStates_) {
+            EmitEvent("reader-attached", pair.first, pair.second.lastState, pair.second.atr);
         }
     }
 
     // Build initial states array with PnP notification
     std::vector<SCARD_READERSTATE> states;
     std::vector<std::string> readerNames;
+    int iterationCount = 0;
 
     while (running_) {
-        // Build states array
+        // Periodic full state refresh to handle Windows PC/SC state drift (Issue #111)
+        // This ensures we don't miss events if the state tracking gets out of sync
+        if (++iterationCount >= STATE_REFRESH_INTERVAL) {
+            iterationCount = 0;
+            std::lock_guard<std::mutex> lock(mutex_);
+
+            // Get fresh state for all readers
+            std::vector<SCARD_READERSTATE> refreshStates;
+            std::vector<std::string> refreshNames;
+
+            for (const auto& pair : readerStates_) {
+                refreshNames.push_back(pair.first);
+                SCARD_READERSTATE state = {};
+                state.szReader = refreshNames.back().c_str();
+                state.dwCurrentState = SCARD_STATE_UNAWARE;  // Force fresh state
+                refreshStates.push_back(state);
+            }
+
+            if (!refreshStates.empty()) {
+                LONG refreshResult = SCardGetStatusChange(context_, 0, refreshStates.data(), refreshStates.size());
+                if (refreshResult == SCARD_S_SUCCESS) {
+                    // Check for state divergence and emit missed events
+                    for (size_t i = 0; i < refreshStates.size(); i++) {
+                        const std::string& name = refreshNames[i];
+                        auto it = readerStates_.find(name);
+                        if (it != readerStates_.end()) {
+                            DWORD oldState = it->second.lastState;
+                            DWORD newState = refreshStates[i].dwEventState & ~SCARD_STATE_CHANGED;
+
+                            bool wasPresent = (oldState & SCARD_STATE_PRESENT) != 0;
+                            bool isPresent = (newState & SCARD_STATE_PRESENT) != 0;
+
+                            if (wasPresent != isPresent) {
+                                // State diverged - emit missed event
+                                std::vector<uint8_t> atr;
+                                if (refreshStates[i].cbAtr > 0) {
+                                    atr.assign(refreshStates[i].rgbAtr,
+                                              refreshStates[i].rgbAtr + refreshStates[i].cbAtr);
+                                }
+
+                                it->second.lastState = newState;
+                                it->second.atr = atr;
+
+                                if (isPresent) {
+                                    EmitEvent("card-inserted", name, newState, atr);
+                                } else {
+                                    EmitEvent("card-removed", name, newState, {});
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build states array using reader names from our map
         {
             std::lock_guard<std::mutex> lock(mutex_);
             states.clear();
             readerNames.clear();
 
-            // Add known readers
-            for (auto& reader : readers_) {
+            // Add known readers - use the map for name-based lookup
+            for (const auto& pair : readerStates_) {
                 SCARD_READERSTATE state = {};
-                readerNames.push_back(reader.name);
+                readerNames.push_back(pair.first);
                 state.szReader = readerNames.back().c_str();
-                state.dwCurrentState = reader.lastState;
+                state.dwCurrentState = pair.second.lastState;
                 states.push_back(state);
             }
 
@@ -184,7 +244,38 @@ void ReaderMonitor::MonitorLoop() {
         }
 
         if (result == SCARD_E_TIMEOUT) {
-            // No changes, continue
+            // Timeout - check for state divergence on Windows (Issue #111)
+            // Windows PC/SC may not always set SCARD_STATE_CHANGED correctly
+            std::lock_guard<std::mutex> lock(mutex_);
+
+            for (size_t i = 0; i < states.size() - 1; i++) {  // Skip PnP entry
+                const std::string& name = readerNames[i];
+                auto it = readerStates_.find(name);
+                if (it != readerStates_.end()) {
+                    DWORD currentState = states[i].dwEventState & ~SCARD_STATE_CHANGED;
+                    DWORD storedState = it->second.lastState;
+
+                    bool wasPresent = (storedState & SCARD_STATE_PRESENT) != 0;
+                    bool isPresent = (currentState & SCARD_STATE_PRESENT) != 0;
+
+                    // If the PRESENT flag differs, we missed an event
+                    if (wasPresent != isPresent) {
+                        std::vector<uint8_t> atr;
+                        if (states[i].cbAtr > 0) {
+                            atr.assign(states[i].rgbAtr, states[i].rgbAtr + states[i].cbAtr);
+                        }
+
+                        it->second.lastState = currentState;
+                        it->second.atr = atr;
+
+                        if (isPresent) {
+                            EmitEvent("card-inserted", name, currentState, atr);
+                        } else {
+                            EmitEvent("card-removed", name, currentState, {});
+                        }
+                    }
+                }
+            }
             continue;
         }
 
@@ -195,8 +286,9 @@ void ReaderMonitor::MonitorLoop() {
             continue;
         }
 
-        // Process changes
+        // Process changes - use reader name for lookup (Issue #111 fix)
         std::lock_guard<std::mutex> lock(mutex_);
+        bool pnpTriggered = false;
 
         for (size_t i = 0; i < states.size(); i++) {
             if (!(states[i].dwEventState & SCARD_STATE_CHANGED)) {
@@ -205,48 +297,52 @@ void ReaderMonitor::MonitorLoop() {
 
             // PnP notification - reader list changed
             if (readerNames[i] == "\\\\?PnP?\\Notification") {
+                pnpTriggered = true;
                 // Get old reader names
                 std::vector<std::string> oldNames;
-                for (const auto& r : readers_) {
-                    oldNames.push_back(r.name);
+                for (const auto& pair : readerStates_) {
+                    oldNames.push_back(pair.first);
                 }
 
-                // Update reader list
+                // Update reader list (this rebuilds readerStates_ map)
                 UpdateReaderList();
 
                 // Find new readers
-                for (const auto& r : readers_) {
+                for (const auto& pair : readerStates_) {
                     bool found = false;
                     for (const auto& old : oldNames) {
-                        if (old == r.name) {
+                        if (old == pair.first) {
                             found = true;
                             break;
                         }
                     }
                     if (!found) {
-                        EmitEvent("reader-attached", r.name, r.lastState, r.atr);
+                        EmitEvent("reader-attached", pair.first, pair.second.lastState, pair.second.atr);
                     }
                 }
 
                 // Find removed readers
                 for (const auto& old : oldNames) {
-                    bool found = false;
-                    for (const auto& r : readers_) {
-                        if (r.name == old) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
+                    if (readerStates_.find(old) == readerStates_.end()) {
                         EmitEvent("reader-detached", old, 0, {});
                     }
                 }
                 continue;
             }
 
-            // Reader state change
-            if (i < readers_.size()) {
-                DWORD oldState = readers_[i].lastState;
+            // Skip reader state processing if PnP was triggered in this iteration
+            // The reader list has changed, so indices are no longer valid
+            // We'll pick up any card changes on the next iteration with fresh state
+            if (pnpTriggered) {
+                continue;
+            }
+
+            // Reader state change - look up by name, not index (Issue #111 fix)
+            const std::string& readerName = readerNames[i];
+            auto it = readerStates_.find(readerName);
+
+            if (it != readerStates_.end()) {
+                DWORD oldState = it->second.lastState;
                 DWORD newState = states[i].dwEventState;
 
                 bool wasPresent = (oldState & SCARD_STATE_PRESENT) != 0;
@@ -258,15 +354,15 @@ void ReaderMonitor::MonitorLoop() {
                     atr.assign(states[i].rgbAtr, states[i].rgbAtr + states[i].cbAtr);
                 }
 
-                // Update stored state
-                readers_[i].lastState = newState & ~SCARD_STATE_CHANGED;
-                readers_[i].atr = atr;
+                // Update stored state using the map
+                it->second.lastState = newState & ~SCARD_STATE_CHANGED;
+                it->second.atr = atr;
 
                 // Emit appropriate event
                 if (!wasPresent && isPresent) {
-                    EmitEvent("card-inserted", readerNames[i], newState, atr);
+                    EmitEvent("card-inserted", readerName, newState, atr);
                 } else if (wasPresent && !isPresent) {
-                    EmitEvent("card-removed", readerNames[i], newState, {});
+                    EmitEvent("card-removed", readerName, newState, {});
                 }
             }
         }
@@ -279,7 +375,7 @@ void ReaderMonitor::UpdateReaderList() {
     LONG result = SCardListReaders(context_, nullptr, nullptr, &readersLen);
 
     if (result == SCARD_E_NO_READERS_AVAILABLE || readersLen == 0) {
-        readers_.clear();
+        readerStates_.clear();
         return;
     }
 
@@ -312,16 +408,15 @@ void ReaderMonitor::UpdateReaderList() {
 
     SCardGetStatusChange(context_, 0, states.data(), states.size());
 
-    // Update reader list
-    readers_.clear();
+    // Update reader states map (Issue #111 fix: use map keyed by name)
+    readerStates_.clear();
     for (size_t i = 0; i < newNames.size(); i++) {
         ReaderInfo info;
-        info.name = newNames[i];
         info.lastState = states[i].dwEventState & ~SCARD_STATE_CHANGED;
         if (states[i].cbAtr > 0) {
             info.atr.assign(states[i].rgbAtr, states[i].rgbAtr + states[i].cbAtr);
         }
-        readers_.push_back(info);
+        readerStates_[newNames[i]] = info;
     }
 }
 

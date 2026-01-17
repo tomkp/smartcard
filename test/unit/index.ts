@@ -1774,3 +1774,255 @@ describe('card.transmit() autoGetResponse option (Issue #105)', () => {
         devices.stop();
     });
 });
+
+describe('Windows Card Event State Tracking (Issue #111)', () => {
+    it('should detect card-inserted when readers are added/removed during monitoring', async () => {
+        // Simulates the scenario where reader list changes (PnP event) while
+        // card events are being processed - tests that events aren't lost
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        const reader1 = new MockReader('Reader 1');
+        const reader2 = new MockReader('Reader 2');
+
+        mockContext.addReader(reader1);
+        mockContext.addReader(reader2);
+        mockMonitor.attachReader(reader1);
+        mockMonitor.attachReader(reader2);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const readerEvents: string[] = [];
+        const cardEvents: { type: string; reader: string }[] = [];
+
+        devices.on('reader-attached', (r: { name: string }) =>
+            readerEvents.push(`attached:${r.name}`)
+        );
+        devices.on('reader-detached', (r: { name: string }) =>
+            readerEvents.push(`detached:${r.name}`)
+        );
+        devices.on('card-inserted', (e: { reader: { name: string } }) =>
+            cardEvents.push({ type: 'inserted', reader: e.reader.name })
+        );
+        devices.on('card-removed', (e: { reader: { name: string } }) =>
+            cardEvents.push({ type: 'removed', reader: e.reader.name })
+        );
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Now simulate a reader being removed while inserting a card in another reader
+        // This is the scenario that causes index mismatch in the native code
+        mockMonitor.detachReader('Reader 1');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // Insert card in remaining reader
+        const card = new MockCard(1, Buffer.from([0x3b, 0x8f]));
+        mockMonitor.insertCard('Reader 2', card);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Verify the card event was correctly associated with Reader 2
+        const insertEvent = cardEvents.find(e => e.type === 'inserted');
+        assert(insertEvent, 'Should have card-inserted event');
+        assert.strictEqual(
+            insertEvent.reader,
+            'Reader 2',
+            'Card event should be associated with correct reader'
+        );
+
+        devices.stop();
+    });
+
+    it('should detect card-removed reliably after multiple reader changes', async () => {
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        const reader1 = new MockReader(
+            'Reader 1',
+            new MockCard(1, Buffer.from([0x3b, 0x01]))
+        );
+        const reader2 = new MockReader(
+            'Reader 2',
+            new MockCard(1, Buffer.from([0x3b, 0x02]))
+        );
+
+        mockContext.addReader(reader1);
+        mockContext.addReader(reader2);
+        mockMonitor.attachReader(reader1);
+        mockMonitor.attachReader(reader2);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const cardEvents: { type: string; reader: string }[] = [];
+
+        devices.on('card-inserted', (e: { reader: { name: string } }) =>
+            cardEvents.push({ type: 'inserted', reader: e.reader.name })
+        );
+        devices.on('card-removed', (e: { reader: { name: string } }) =>
+            cardEvents.push({ type: 'removed', reader: e.reader.name })
+        );
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Both cards should be detected
+        assert.strictEqual(
+            cardEvents.filter(e => e.type === 'inserted').length,
+            2,
+            'Should detect both cards initially'
+        );
+
+        // Add a new reader (PnP event)
+        const reader3 = new MockReader('Reader 3');
+        mockMonitor.attachReader(reader3);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // Remove card from Reader 1
+        mockMonitor.removeCard('Reader 1');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Remove card from Reader 2
+        mockMonitor.removeCard('Reader 2');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        const removeEvents = cardEvents.filter(e => e.type === 'removed');
+        assert.strictEqual(
+            removeEvents.length,
+            2,
+            'Should detect both card removals'
+        );
+        assert(
+            removeEvents.some(e => e.reader === 'Reader 1'),
+            'Should detect Reader 1 card removal'
+        );
+        assert(
+            removeEvents.some(e => e.reader === 'Reader 2'),
+            'Should detect Reader 2 card removal'
+        );
+
+        devices.stop();
+    });
+
+    it('should handle rapid card insert/remove cycles', async () => {
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        const reader = new MockReader('Test Reader');
+        mockContext.addReader(reader);
+        mockMonitor.attachReader(reader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const events: string[] = [];
+
+        devices.on('card-inserted', () => events.push('inserted'));
+        devices.on('card-removed', () => events.push('removed'));
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // Rapid insert/remove cycles
+        for (let i = 0; i < 5; i++) {
+            const card = new MockCard(1, Buffer.from([0x3b, i]));
+            mockMonitor.insertCard('Test Reader', card);
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            mockMonitor.removeCard('Test Reader');
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Should have equal number of inserts and removes
+        const insertCount = events.filter(e => e === 'inserted').length;
+        const removeCount = events.filter(e => e === 'removed').length;
+
+        assert.strictEqual(insertCount, 5, 'Should detect all 5 card insertions');
+        assert.strictEqual(removeCount, 5, 'Should detect all 5 card removals');
+
+        devices.stop();
+    });
+
+    it('should maintain correct state when reader is reattached', async () => {
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        const reader = new MockReader(
+            'USB Reader',
+            new MockCard(1, Buffer.from([0x3b, 0x8f]))
+        );
+        mockContext.addReader(reader);
+        mockMonitor.attachReader(reader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const events: string[] = [];
+
+        devices.on('reader-attached', () => events.push('reader-attached'));
+        devices.on('reader-detached', () => events.push('reader-detached'));
+        devices.on('card-inserted', () => events.push('card-inserted'));
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        assert(events.includes('reader-attached'), 'Initial reader-attached');
+        assert(events.includes('card-inserted'), 'Initial card-inserted');
+
+        // Simulate USB reader being unplugged and replugged (with card still in it)
+        mockMonitor.detachReader('USB Reader');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // Reattach with card
+        const newReader = new MockReader(
+            'USB Reader',
+            new MockCard(1, Buffer.from([0x3b, 0x8f]))
+        );
+        mockMonitor.attachReader(newReader);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Should see the full cycle: detach, attach, card-inserted
+        assert.strictEqual(
+            events.filter(e => e === 'reader-attached').length,
+            2,
+            'Should see two reader-attached events'
+        );
+        assert.strictEqual(
+            events.filter(e => e === 'card-inserted').length,
+            2,
+            'Should see two card-inserted events'
+        );
+
+        devices.stop();
+    });
+});
