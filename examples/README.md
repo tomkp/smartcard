@@ -9,56 +9,73 @@ Make sure you have built the library first:
 ```bash
 cd ..
 npm install
+npm run build
+```
+
+## Running Examples
+
+Examples are TypeScript files that get compiled to `dist/examples/`. Run them from the project root:
+
+```bash
+# From project root
+node dist/examples/list-readers.js
+```
+
+Or from the dist/examples directory:
+
+```bash
+cd dist/examples
+node list-readers.js
 ```
 
 ## Examples
 
 ### Basic Examples
 
-#### list-readers.js
+#### list-readers.ts
 
 List all available PC/SC readers and their status.
 
 ```bash
-node list-readers.js
+node dist/examples/list-readers.js
 ```
 
-#### read-card.js
+#### read-card.ts
 
 Connect to a card and read its UID and ATR.
 
 ```bash
-node read-card.js          # Use first reader
-node read-card.js 1        # Use second reader
+node dist/examples/read-card.js          # Use first reader
+node dist/examples/read-card.js 1        # Use second reader
 ```
 
-#### monitor-cards.js
+#### monitor-cards.ts
 
 Monitor for card insert/remove events using the high-level Devices API.
 
 ```bash
-node monitor-cards.js
+node dist/examples/monitor-cards.js
 # Press Ctrl+C to stop
 ```
 
-#### send-apdu.js
+#### send-apdu.ts
 
 Send a custom APDU command to a card.
 
 ```bash
-node send-apdu.js "FF CA 00 00 00"      # Get UID (contactless)
-node send-apdu.js "00 A4 04 00"         # Select command
-node send-apdu.js "00 B0 00 00 10"      # Read 16 bytes
+node dist/examples/send-apdu.js "FF CA 00 00 00"      # Get UID (contactless)
+node dist/examples/send-apdu.js "00 A4 04 00"         # Select command
+node dist/examples/send-apdu.js "00 B0 00 00 10"      # Read 16 bytes
 ```
 
 ### Advanced Examples
 
-#### error-handling.js
+#### error-handling.ts
 
 Demonstrates proper error handling with specific PC/SC error types.
 
 ```bash
-node error-handling.js
+node dist/examples/error-handling.js
 ```
 
 Shows how to catch and handle:
@@ -68,23 +85,23 @@ Shows how to catch and handle:
 - `ServiceNotRunningError` - PC/SC daemon not running
 - `SharingViolationError` - Card in use by another app
 
-#### wait-for-card.js
+#### wait-for-card.ts
 
 Wait for a card using the low-level `Context.waitForChange()` API.
 
 ```bash
-node wait-for-card.js        # Wait indefinitely
-node wait-for-card.js 30     # Wait up to 30 seconds
+node dist/examples/wait-for-card.js        # Wait indefinitely
+node dist/examples/wait-for-card.js 30     # Wait up to 30 seconds
 ```
 
 This demonstrates the polling-based approach as an alternative to the event-driven `Devices` API.
 
-#### control-command.js
+#### control-command.ts
 
 Send control commands to readers for advanced features.
 
 ```bash
-node control-command.js
+node dist/examples/control-command.js
 ```
 
 Demonstrates:
@@ -93,12 +110,12 @@ Demonstrates:
 - Using `parseFeatures()` to decode TLV responses
 - Platform-specific codes with `SCARD_CTL_CODE()`
 
-#### reconnect.js
+#### reconnect.ts
 
 Reset or change protocols on a connected card.
 
 ```bash
-node reconnect.js
+node dist/examples/reconnect.js
 ```
 
 Demonstrates:
@@ -107,15 +124,15 @@ Demonstrates:
 - Upgrading to exclusive access
 - Warm reset vs cold reset (unpower)
 
-#### mifare-read-write.js
+#### mifare-read-write.ts
 
 Read and write MIFARE Classic cards (1K/4K).
 
 ```bash
-node mifare-read-write.js read            # Read block 4
-node mifare-read-write.js read 8          # Read block 8
-node mifare-read-write.js write 4 "00112233445566778899AABBCCDDEEFF"
-node mifare-read-write.js dump            # Dump all readable blocks
+node dist/examples/mifare-read-write.js read            # Read block 4
+node dist/examples/mifare-read-write.js read 8          # Read block 8
+node dist/examples/mifare-read-write.js write 4 "00112233445566778899AABBCCDDEEFF"
+node dist/examples/mifare-read-write.js dump            # Dump all readable blocks
 ```
 
 **Warning**: Be careful when writing! Writing to sector trailers (blocks 3, 7, 11, ...) can permanently lock sectors.
