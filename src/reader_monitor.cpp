@@ -2,6 +2,7 @@
 #include "pcsc_errors.h"
 #include <cstring>
 #include <unordered_map>
+#include <memory>
 
 Napi::FunctionReference ReaderMonitor::constructor;
 
@@ -248,6 +249,11 @@ void ReaderMonitor::MonitorLoop() {
             // Windows PC/SC may not always set SCARD_STATE_CHANGED correctly
             std::lock_guard<std::mutex> lock(mutex_);
 
+            // Guard against underflow if states only has PnP entry
+            if (states.size() <= 1) {
+                continue;
+            }
+
             for (size_t i = 0; i < states.size() - 1; i++) {  // Skip PnP entry
                 const std::string& name = readerNames[i];
                 auto it = readerStates_.find(name);
@@ -422,26 +428,27 @@ void ReaderMonitor::UpdateReaderList() {
 
 void ReaderMonitor::EmitEvent(const std::string& eventType, const std::string& readerName,
                                DWORD state, const std::vector<uint8_t>& atr) {
-    // Copy data for transfer to JS thread
-    EventData* data = new EventData{eventType, readerName, state, atr};
+    // Use shared_ptr to ensure memory is freed even if ThreadSafeFunction is released
+    // before the callback executes (prevents memory leak)
+    auto data = std::make_shared<EventData>(EventData{eventType, readerName, state, atr});
 
     // Call JavaScript callback on main thread
-    tsfn_.BlockingCall(data, [](Napi::Env env, Napi::Function callback, EventData* data) {
+    // Capture shared_ptr by value to extend lifetime until callback executes
+    tsfn_.BlockingCall(data.get(), [data](Napi::Env env, Napi::Function callback, EventData* ptr) {
         // Build event object
         Napi::Object event = Napi::Object::New(env);
-        event.Set("type", Napi::String::New(env, data->eventType));
-        event.Set("reader", Napi::String::New(env, data->readerName));
-        event.Set("state", Napi::Number::New(env, data->state));
+        event.Set("type", Napi::String::New(env, ptr->eventType));
+        event.Set("reader", Napi::String::New(env, ptr->readerName));
+        event.Set("state", Napi::Number::New(env, ptr->state));
 
-        if (!data->atr.empty()) {
-            event.Set("atr", Napi::Buffer<uint8_t>::Copy(env, data->atr.data(), data->atr.size()));
+        if (!ptr->atr.empty()) {
+            event.Set("atr", Napi::Buffer<uint8_t>::Copy(env, ptr->atr.data(), ptr->atr.size()));
         } else {
             event.Set("atr", env.Null());
         }
 
         // Call the callback
         callback.Call({event});
-
-        delete data;
+        // shared_ptr automatically cleaned up when lambda is destroyed
     });
 }
