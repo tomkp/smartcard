@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include <unordered_map>
 #include "platform/pcsc.h"
 
 /**
@@ -13,6 +14,9 @@
  *
  * Runs a background thread that monitors for reader/card state changes
  * and emits events to JavaScript without blocking the main thread.
+ *
+ * Issue #111 fix: Uses a map keyed by reader name instead of array indices
+ * to prevent state mismatch when readers are added/removed during monitoring.
  */
 class ReaderMonitor : public Napi::ObjectWrap<ReaderMonitor> {
 public:
@@ -36,13 +40,12 @@ private:
     // Thread-safe function for emitting events
     Napi::ThreadSafeFunction tsfn_;
 
-    // Current known reader states
+    // Current known reader states (Issue #111: keyed by reader name for reliable lookup)
     struct ReaderInfo {
-        std::string name;
         DWORD lastState;
         std::vector<uint8_t> atr;
     };
-    std::vector<ReaderInfo> readers_;
+    std::unordered_map<std::string, ReaderInfo> readerStates_;
 
     // JavaScript methods
     Napi::Value Start(const Napi::CallbackInfo& info);
