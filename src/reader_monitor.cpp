@@ -247,6 +247,8 @@ void ReaderMonitor::MonitorLoop() {
         if (result == SCARD_E_TIMEOUT) {
             // Timeout - check for state divergence on Windows (Issue #111)
             // Windows PC/SC may not always set SCARD_STATE_CHANGED correctly
+            // IMPORTANT: On timeout, dwEventState may contain stale data, so we must
+            // make a fresh non-blocking query to get the actual current state
             std::lock_guard<std::mutex> lock(mutex_);
 
             // Guard against underflow if states only has PnP entry
@@ -254,11 +256,28 @@ void ReaderMonitor::MonitorLoop() {
                 continue;
             }
 
+            // Build fresh query states with SCARD_STATE_UNAWARE to get current state
+            std::vector<SCARD_READERSTATE> freshStates;
+            std::vector<std::string> freshNames;
             for (size_t i = 0; i < states.size() - 1; i++) {  // Skip PnP entry
-                const std::string& name = readerNames[i];
+                freshNames.push_back(readerNames[i]);
+                SCARD_READERSTATE state = {};
+                state.szReader = freshNames.back().c_str();
+                state.dwCurrentState = SCARD_STATE_UNAWARE;  // Force fresh state query
+                freshStates.push_back(state);
+            }
+
+            // Query current state (non-blocking)
+            LONG freshResult = SCardGetStatusChange(context_, 0, freshStates.data(), freshStates.size());
+            if (freshResult != SCARD_S_SUCCESS) {
+                continue;
+            }
+
+            for (size_t i = 0; i < freshStates.size(); i++) {
+                const std::string& name = freshNames[i];
                 auto it = readerStates_.find(name);
                 if (it != readerStates_.end()) {
-                    DWORD currentState = states[i].dwEventState & ~SCARD_STATE_CHANGED;
+                    DWORD currentState = freshStates[i].dwEventState & ~SCARD_STATE_CHANGED;
                     DWORD storedState = it->second.lastState;
 
                     bool wasPresent = (storedState & SCARD_STATE_PRESENT) != 0;
@@ -267,8 +286,8 @@ void ReaderMonitor::MonitorLoop() {
                     // If the PRESENT flag differs, we missed an event
                     if (wasPresent != isPresent) {
                         std::vector<uint8_t> atr;
-                        if (states[i].cbAtr > 0) {
-                            atr.assign(states[i].rgbAtr, states[i].rgbAtr + states[i].cbAtr);
+                        if (freshStates[i].cbAtr > 0) {
+                            atr.assign(freshStates[i].rgbAtr, freshStates[i].rgbAtr + freshStates[i].cbAtr);
                         }
 
                         it->second.lastState = currentState;
