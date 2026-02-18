@@ -245,39 +245,57 @@ void ReaderMonitor::MonitorLoop() {
         }
 
         if (result == SCARD_E_TIMEOUT) {
-            // Timeout - check for state divergence on Windows (Issue #111)
-            // Windows PC/SC may not always set SCARD_STATE_CHANGED correctly
+            // Timeout - query fresh state to detect missed events (Issue #111)
+            // On Windows, dwEventState after timeout may just mirror dwCurrentState
+            // rather than reflecting actual hardware state. We must explicitly
+            // query with SCARD_STATE_UNAWARE to get the real current state.
             std::lock_guard<std::mutex> lock(mutex_);
 
-            // Guard against underflow if states only has PnP entry
-            if (states.size() <= 1) {
+            if (readerStates_.empty()) {
                 continue;
             }
 
-            for (size_t i = 0; i < states.size() - 1; i++) {  // Skip PnP entry
-                const std::string& name = readerNames[i];
+            // Build fresh state query for all readers
+            std::vector<SCARD_READERSTATE> freshStates;
+            std::vector<std::string> freshNames;
+
+            for (const auto& pair : readerStates_) {
+                freshNames.push_back(pair.first);
+                SCARD_READERSTATE state = {};
+                state.szReader = freshNames.back().c_str();
+                state.dwCurrentState = SCARD_STATE_UNAWARE;
+                freshStates.push_back(state);
+            }
+
+            LONG freshResult = SCardGetStatusChange(context_, 0, freshStates.data(), freshStates.size());
+            if (freshResult != SCARD_S_SUCCESS) {
+                continue;
+            }
+
+            for (size_t i = 0; i < freshStates.size(); i++) {
+                const std::string& name = freshNames[i];
                 auto it = readerStates_.find(name);
                 if (it != readerStates_.end()) {
-                    DWORD currentState = states[i].dwEventState & ~SCARD_STATE_CHANGED;
+                    DWORD freshState = freshStates[i].dwEventState & ~SCARD_STATE_CHANGED;
                     DWORD storedState = it->second.lastState;
 
                     bool wasPresent = (storedState & SCARD_STATE_PRESENT) != 0;
-                    bool isPresent = (currentState & SCARD_STATE_PRESENT) != 0;
+                    bool isPresent = (freshState & SCARD_STATE_PRESENT) != 0;
 
-                    // If the PRESENT flag differs, we missed an event
                     if (wasPresent != isPresent) {
                         std::vector<uint8_t> atr;
-                        if (states[i].cbAtr > 0) {
-                            atr.assign(states[i].rgbAtr, states[i].rgbAtr + states[i].cbAtr);
+                        if (freshStates[i].cbAtr > 0) {
+                            atr.assign(freshStates[i].rgbAtr,
+                                      freshStates[i].rgbAtr + freshStates[i].cbAtr);
                         }
 
-                        it->second.lastState = currentState;
+                        it->second.lastState = freshState;
                         it->second.atr = atr;
 
                         if (isPresent) {
-                            EmitEvent("card-inserted", name, currentState, atr);
+                            EmitEvent("card-inserted", name, freshState, atr);
                         } else {
-                            EmitEvent("card-removed", name, currentState, {});
+                            EmitEvent("card-removed", name, freshState, {});
                         }
                     }
                 }
