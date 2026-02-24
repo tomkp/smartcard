@@ -240,11 +240,11 @@ void ReaderMonitor::MonitorLoop() {
             break;
         }
 
-        if (result == SCARD_E_CANCELLED) {
+        if (result == static_cast<LONG>(SCARD_E_CANCELLED)) {
             break;
         }
 
-        if (result == SCARD_E_TIMEOUT) {
+        if (result == static_cast<LONG>(SCARD_E_TIMEOUT)) {
             // Timeout - query fresh state to detect missed events (Issue #111)
             // On Windows, dwEventState after timeout may just mirror dwCurrentState
             // rather than reflecting actual hardware state. We must explicitly
@@ -425,7 +425,7 @@ void ReaderMonitor::UpdateReaderList() {
     DWORD readersLen = 0;
     LONG result = SCardListReaders(context_, nullptr, nullptr, &readersLen);
 
-    if (result == SCARD_E_NO_READERS_AVAILABLE || readersLen == 0) {
+    if (result == static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE) || readersLen == 0) {
         readerStates_.clear();
         return;
     }
