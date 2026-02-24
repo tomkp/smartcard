@@ -60,10 +60,10 @@ void WaitForChangeWorker::OnOK() {
         }
 
         deferred_.Resolve(changes);
-    } else if (result_ == SCARD_E_CANCELLED) {
+    } else if (result_ == static_cast<LONG>(SCARD_E_CANCELLED)) {
         // Cancelled - resolve with null
         deferred_.Resolve(env.Null());
-    } else if (result_ == SCARD_E_TIMEOUT) {
+    } else if (result_ == static_cast<LONG>(SCARD_E_TIMEOUT)) {
         // Timeout - resolve with empty array
         deferred_.Resolve(Napi::Array::New(env, 0));
     } else {
