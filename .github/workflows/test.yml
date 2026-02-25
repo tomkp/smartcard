@@ -36,8 +36,8 @@ jobs:
 
       - name: Run native C++ tests (Unix)
         if: runner.os != 'Windows'
-        run: node-gyp build && ./build/Release/smartcard_tests
+        run: npx node-gyp build && ./build/Release/smartcard_tests
 
       - name: Run native C++ tests (Windows)
         if: runner.os == 'Windows'
-        run: node-gyp build && .\build\Release\smartcard_tests.exe
+        run: npx node-gyp build && .\build\Release\smartcard_tests.exe

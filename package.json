@@ -32,7 +32,7 @@
         "test": "npm run build:ts && node --test dist/test/integration/index.js && node --test dist/test/unit/index.js",
         "test:unit": "npm run build:ts && node --test dist/test/unit/index.js",
         "test:integration": "npm run build:ts && node --test dist/test/integration/index.js",
-        "test:native": "node-gyp build && ./build/Release/smartcard_tests",
+        "test:native": "npx node-gyp build && ./build/Release/smartcard_tests",
         "test:coverage": "npm run build:ts && c8 --include=dist/lib/**/*.js node --test dist/test/unit/index.js",
         "typecheck": "tsc --noEmit",
         "coverage:report": "c8 report --reporter=text --reporter=html",
