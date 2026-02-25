@@ -3,6 +3,7 @@
 #include <cstring>
 #include <unordered_map>
 #include <memory>
+#include "reader_state_utils.h"
 
 Napi::FunctionReference ReaderMonitor::constructor;
 
@@ -184,11 +185,8 @@ void ReaderMonitor::MonitorLoop() {
                             DWORD oldState = it->second.lastState;
                             DWORD newState = refreshStates[i].dwEventState & ~SCARD_STATE_CHANGED;
 
-                            bool wasPresent = (oldState & SCARD_STATE_PRESENT) != 0;
-                            bool isPresent = (newState & SCARD_STATE_PRESENT) != 0;
-
-                            if (wasPresent != isPresent) {
-                                // State diverged - emit missed event
+                            CardEvent event = DetectCardStateChange(oldState, newState);
+                            if (event == CardEvent::Inserted) {
                                 std::vector<uint8_t> atr;
                                 if (refreshStates[i].cbAtr > 0) {
                                     atr.assign(refreshStates[i].rgbAtr,
@@ -197,12 +195,11 @@ void ReaderMonitor::MonitorLoop() {
 
                                 it->second.lastState = newState;
                                 it->second.atr = atr;
-
-                                if (isPresent) {
-                                    EmitEvent("card-inserted", name, newState, atr);
-                                } else {
-                                    EmitEvent("card-removed", name, newState, {});
-                                }
+                                EmitEvent("card-inserted", name, newState, atr);
+                            } else if (event == CardEvent::Removed) {
+                                it->second.lastState = newState;
+                                it->second.atr = {};
+                                EmitEvent("card-removed", name, newState, {});
                             }
                         }
                     }
@@ -279,10 +276,8 @@ void ReaderMonitor::MonitorLoop() {
                     DWORD freshState = freshStates[i].dwEventState & ~SCARD_STATE_CHANGED;
                     DWORD storedState = it->second.lastState;
 
-                    bool wasPresent = (storedState & SCARD_STATE_PRESENT) != 0;
-                    bool isPresent = (freshState & SCARD_STATE_PRESENT) != 0;
-
-                    if (wasPresent != isPresent) {
+                    CardEvent event = DetectCardStateChange(storedState, freshState);
+                    if (event == CardEvent::Inserted) {
                         std::vector<uint8_t> atr;
                         if (freshStates[i].cbAtr > 0) {
                             atr.assign(freshStates[i].rgbAtr,
@@ -291,12 +286,11 @@ void ReaderMonitor::MonitorLoop() {
 
                         it->second.lastState = freshState;
                         it->second.atr = atr;
-
-                        if (isPresent) {
-                            EmitEvent("card-inserted", name, freshState, atr);
-                        } else {
-                            EmitEvent("card-removed", name, freshState, {});
-                        }
+                        EmitEvent("card-inserted", name, freshState, atr);
+                    } else if (event == CardEvent::Removed) {
+                        it->second.lastState = freshState;
+                        it->second.atr = {};
+                        EmitEvent("card-removed", name, freshState, {});
                     }
                 }
             }
@@ -369,9 +363,6 @@ void ReaderMonitor::MonitorLoop() {
                 DWORD oldState = it->second.lastState;
                 DWORD newState = states[i].dwEventState;
 
-                bool wasPresent = (oldState & SCARD_STATE_PRESENT) != 0;
-                bool isPresent = (newState & SCARD_STATE_PRESENT) != 0;
-
                 // Get ATR
                 std::vector<uint8_t> atr;
                 if (states[i].cbAtr > 0) {
@@ -383,9 +374,10 @@ void ReaderMonitor::MonitorLoop() {
                 it->second.atr = atr;
 
                 // Emit appropriate event
-                if (!wasPresent && isPresent) {
+                CardEvent event = DetectCardStateChange(oldState, newState);
+                if (event == CardEvent::Inserted) {
                     EmitEvent("card-inserted", readerName, newState, atr);
-                } else if (wasPresent && !isPresent) {
+                } else if (event == CardEvent::Removed) {
                     EmitEvent("card-removed", readerName, newState, {});
                 }
             }
