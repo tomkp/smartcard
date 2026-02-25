@@ -33,3 +33,6 @@ jobs:
 
       - name: Run unit tests with coverage
         run: npm run test:coverage
+
+      - name: Run native C++ tests
+        run: npm run test:native
