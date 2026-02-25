@@ -41,5 +41,37 @@
                 "cflags_cc": ["-fexceptions"]
             }]
         ]
+    },
+    {
+        "target_name": "smartcard_tests",
+        "type": "executable",
+        "sources": [
+            "src/test/test_main.cpp",
+            "src/test/reader_state_utils_test.cpp"
+        ],
+        "include_dirs": [
+            "src",
+            "src/test"
+        ],
+        "cflags_cc!": ["-fno-exceptions"],
+        "conditions": [
+            ["OS=='mac'", {
+                "xcode_settings": {
+                    "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
+                    "CLANG_CXX_LANGUAGE_STANDARD": "c++17"
+                }
+            }],
+            ["OS=='linux'", {
+                "cflags_cc": ["-std=c++17", "-fexceptions"]
+            }],
+            ["OS=='win'", {
+                "msvs_settings": {
+                    "VCCLCompilerTool": {
+                        "ExceptionHandling": 1,
+                        "AdditionalOptions": ["/std:c++17"]
+                    }
+                }
+            }]
+        ]
     }]
 }

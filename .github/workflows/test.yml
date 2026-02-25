@@ -33,3 +33,11 @@ jobs:
 
       - name: Run unit tests with coverage
         run: npm run test:coverage
+
+      - name: Run native C++ tests (Unix)
+        if: runner.os != 'Windows'
+        run: npx node-gyp build && ./build/Release/smartcard_tests
+
+      - name: Run native C++ tests (Windows)
+        if: runner.os == 'Windows'
+        run: npx node-gyp build && .\build\Release\smartcard_tests.exe
