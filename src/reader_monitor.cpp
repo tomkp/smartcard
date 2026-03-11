@@ -240,11 +240,11 @@ void ReaderMonitor::MonitorLoop() {
             break;
         }
 
-        if (result == SCARD_E_CANCELLED) {
+        if (result == static_cast<LONG>(SCARD_E_CANCELLED)) {
             break;
         }
 
-        if (result == SCARD_E_TIMEOUT) {
+        if (result == static_cast<LONG>(SCARD_E_TIMEOUT)) {
             // Timeout - query fresh state to detect missed events (Issue #111)
             // On Windows, dwEventState after timeout may just mirror dwCurrentState
             // rather than reflecting actual hardware state. We must explicitly
@@ -322,6 +322,8 @@ void ReaderMonitor::MonitorLoop() {
             // PnP notification - reader list changed
             if (readerNames[i] == "\\\\?PnP?\\Notification") {
                 pnpTriggered = true;
+                const auto oldReaderStates = readerStates_;
+
                 // Get old reader names
                 std::vector<std::string> oldNames;
                 for (const auto& pair : readerStates_) {
@@ -351,12 +353,33 @@ void ReaderMonitor::MonitorLoop() {
                         EmitEvent("reader-detached", old, 0, {});
                     }
                 }
-                continue;
+
+                // Reconcile card presence for readers that still exist after PnP update.
+                // This minimizes missed insert/remove events that occurred during reader churn.
+                for (const auto& pair : readerStates_) {
+                    const std::string& name = pair.first;
+                    auto oldIt = oldReaderStates.find(name);
+                    if (oldIt == oldReaderStates.end()) {
+                        continue;
+                    }
+
+                    DWORD oldState = oldIt->second.lastState;
+                    DWORD newState = pair.second.lastState;
+
+                    bool wasPresent = (oldState & SCARD_STATE_PRESENT) != 0;
+                    bool isPresent = (newState & SCARD_STATE_PRESENT) != 0;
+
+                    if (!wasPresent && isPresent) {
+                        EmitEvent("card-inserted", name, newState, pair.second.atr);
+                    } else if (wasPresent && !isPresent) {
+                        EmitEvent("card-removed", name, newState, {});
+                    }
+                }
+
+                // Reader indices from this event batch may now be stale.
+                break;
             }
 
-            // Skip reader state processing if PnP was triggered in this iteration
-            // The reader list has changed, so indices are no longer valid
-            // We'll pick up any card changes on the next iteration with fresh state
             if (pnpTriggered) {
                 continue;
             }
@@ -390,6 +413,10 @@ void ReaderMonitor::MonitorLoop() {
                 }
             }
         }
+
+        if (pnpTriggered) {
+            continue;
+        }
     }
 }
 
@@ -398,7 +425,7 @@ void ReaderMonitor::UpdateReaderList() {
     DWORD readersLen = 0;
     LONG result = SCardListReaders(context_, nullptr, nullptr, &readersLen);
 
-    if (result == SCARD_E_NO_READERS_AVAILABLE || readersLen == 0) {
+    if (result == static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE) || readersLen == 0) {
         readerStates_.clear();
         return;
     }
@@ -423,25 +450,47 @@ void ReaderMonitor::UpdateReaderList() {
         p += strlen(p) + 1;
     }
 
-    // Get initial state for new readers
+    // Preserve previous state for readers that still exist
+    const auto previousStates = readerStates_;
+
+    // Get initial state for listed readers
     std::vector<SCARD_READERSTATE> states(newNames.size());
     for (size_t i = 0; i < newNames.size(); i++) {
         states[i].szReader = newNames[i].c_str();
         states[i].dwCurrentState = SCARD_STATE_UNAWARE;
     }
 
-    SCardGetStatusChange(context_, 0, states.data(), states.size());
+    LONG stateResult = SCARD_S_SUCCESS;
+    if (!states.empty()) {
+        stateResult = SCardGetStatusChange(context_, 0, states.data(), states.size());
+    }
 
     // Update reader states map (Issue #111 fix: use map keyed by name)
-    readerStates_.clear();
+    std::unordered_map<std::string, ReaderInfo> updatedStates;
     for (size_t i = 0; i < newNames.size(); i++) {
-        ReaderInfo info;
-        info.lastState = states[i].dwEventState & ~SCARD_STATE_CHANGED;
-        if (states[i].cbAtr > 0) {
-            info.atr.assign(states[i].rgbAtr, states[i].rgbAtr + states[i].cbAtr);
+        const std::string& name = newNames[i];
+        ReaderInfo info = {};
+
+        auto previousIt = previousStates.find(name);
+        if (previousIt != previousStates.end()) {
+            info = previousIt->second;
+        } else {
+            info.lastState = SCARD_STATE_UNAWARE;
         }
-        readerStates_[newNames[i]] = info;
+
+        if (stateResult == SCARD_S_SUCCESS) {
+            info.lastState = states[i].dwEventState & ~SCARD_STATE_CHANGED;
+            if (states[i].cbAtr > 0) {
+                info.atr.assign(states[i].rgbAtr, states[i].rgbAtr + states[i].cbAtr);
+            } else {
+                info.atr.clear();
+            }
+        }
+
+        updatedStates[name] = info;
     }
+
+    readerStates_.swap(updatedStates);
 }
 
 void ReaderMonitor::EmitEvent(const std::string& eventType, const std::string& readerName,
@@ -450,9 +499,9 @@ void ReaderMonitor::EmitEvent(const std::string& eventType, const std::string& r
     // before the callback executes (prevents memory leak)
     auto data = std::make_shared<EventData>(EventData{eventType, readerName, state, atr});
 
-    // Call JavaScript callback on main thread
-    // Capture shared_ptr by value to extend lifetime until callback executes
-    tsfn_.BlockingCall(data.get(), [data](Napi::Env env, Napi::Function callback, EventData* ptr) {
+    // Call JavaScript callback on main thread without blocking monitor thread.
+    // Capture shared_ptr by value to extend lifetime until callback executes.
+    napi_status status = tsfn_.NonBlockingCall(data.get(), [data](Napi::Env env, Napi::Function callback, EventData* ptr) {
         // Build event object
         Napi::Object event = Napi::Object::New(env);
         event.Set("type", Napi::String::New(env, ptr->eventType));
@@ -469,4 +518,7 @@ void ReaderMonitor::EmitEvent(const std::string& eventType, const std::string& r
         callback.Call({event});
         // shared_ptr automatically cleaned up when lambda is destroyed
     });
+
+    // Ignore errors when queue is closing during shutdown.
+    (void)status;
 }

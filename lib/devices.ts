@@ -284,42 +284,69 @@ export class Devices extends EventEmitter {
 
         state.hasCard = true;
 
+        // Resolve reader with a short retry window for transient list churn.
+        const maxLookupAttempts = 3;
+        const lookupRetryDelayMs = 50;
+        let reader: Reader | undefined;
+
+        for (let attempt = 0; attempt < maxLookupAttempts; attempt++) {
+            if (!this._running || !this._context || !this._context.isValid) {
+                return;
+            }
+
+            const readers = this._context.listReaders();
+            reader = readers.find((r) => r.name === readerName);
+            if (reader) {
+                break;
+            }
+
+            if (attempt < maxLookupAttempts - 1) {
+                await new Promise((resolve) =>
+                    setTimeout(resolve, lookupRetryDelayMs)
+                );
+            }
+        }
+
+        if (!reader) {
+            this.emit(
+                'error',
+                new Error(
+                    `Reader not found while handling card insertion: ${readerName}`
+                )
+            );
+            return;
+        }
+
         // Try to connect to the card
         try {
-            const readers = this._context!.listReaders();
-            const reader = readers.find((r) => r.name === readerName);
-
-            if (reader) {
-                let nativeCard: Card;
-                try {
-                    // First try with both T=0 and T=1 protocols
+            let nativeCard: Card;
+            try {
+                // First try with both T=0 and T=1 protocols
+                nativeCard = await reader.connect(
+                    this._SCARD_SHARE_SHARED,
+                    this._SCARD_PROTOCOL_T0 | this._SCARD_PROTOCOL_T1
+                );
+            } catch (dualProtocolErr) {
+                // If dual protocol fails with unresponsive card error,
+                // fallback to T=0 only (issue #34)
+                if (isUnresponsiveCardError(dualProtocolErr as Error)) {
                     nativeCard = await reader.connect(
                         this._SCARD_SHARE_SHARED,
-                        this._SCARD_PROTOCOL_T0 | this._SCARD_PROTOCOL_T1
+                        this._SCARD_PROTOCOL_T0
                     );
-                } catch (dualProtocolErr) {
-                    // If dual protocol fails with unresponsive card error,
-                    // fallback to T=0 only (issue #34)
-                    if (isUnresponsiveCardError(dualProtocolErr as Error)) {
-                        nativeCard = await reader.connect(
-                            this._SCARD_SHARE_SHARED,
-                            this._SCARD_PROTOCOL_T0
-                        );
-                    } else {
-                        // Re-throw if it's a different error
-                        throw dualProtocolErr;
-                    }
+                } else {
+                    throw dualProtocolErr;
                 }
-
-                // Wrap the native card to add autoGetResponse support
-                const card = wrapCard(nativeCard);
-                state.card = card;
-
-                this.emit('card-inserted', {
-                    reader: { name: readerName, state: eventState, atr: atr },
-                    card: card,
-                });
             }
+
+            // Wrap the native card to add autoGetResponse support
+            const card = wrapCard(nativeCard);
+            state.card = card;
+
+            this.emit('card-inserted', {
+                reader: { name: readerName, state: eventState, atr: atr },
+                card: card,
+            });
         } catch (err) {
             // Emit error but don't fail
             this.emit('error', err as Error);
