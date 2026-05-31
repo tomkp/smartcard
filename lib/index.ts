@@ -1,11 +1,8 @@
 import type {
     ContextConstructor,
-    NativeAddon,
     ReaderMonitorConstructor,
 } from './types';
-
-// Load native addon
-const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
+import addon from './native';
 
 // Re-export native classes
 export const Context = addon.Context as ContextConstructor;

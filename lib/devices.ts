@@ -6,14 +6,12 @@ import type {
     DeviceEvents,
     DevicesOptions,
     MonitorEvent,
-    NativeAddon,
     Reader,
     ReaderMonitor,
     ReaderMonitorConstructor,
 } from './types';
 import { wrapCard } from './card-wrapper';
-
-const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
+import addon from './native';
 
 interface ReaderStateInternal {
     hasCard: boolean;
