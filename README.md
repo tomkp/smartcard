@@ -297,6 +297,36 @@ interface Card {
 }
 ```
 
+#### Resetting a Card (Cold / Warm Reset)
+
+You can reset a card programmatically without physically removing and
+reinserting it. This is useful to recover from an error state (for example a
+persistent `6A82` / file-not-found) by returning the card to its initial state.
+
+Use `reconnect()` and pass a disposition as the third (`init`) argument:
+
+- `SCARD_RESET_CARD` — **warm reset** (re-runs the card's reset sequence without
+  removing power).
+- `SCARD_UNPOWER_CARD` — **cold reset** (powers the card down and back up).
+
+```javascript
+const { SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0, SCARD_PROTOCOL_T1, SCARD_UNPOWER_CARD } = require('smartcard');
+
+// Cold reset: power-cycle the card, then continue using the same card object
+await card.reconnect(
+    SCARD_SHARE_SHARED,
+    SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
+    SCARD_UNPOWER_CARD
+);
+
+// The card is now back in its initial state; re-select your application
+const response = await card.transmit([0x00, 0xA4, 0x04, 0x00, /* ... */]);
+```
+
+Alternatively, `disconnect(SCARD_UNPOWER_CARD)` followed by a fresh
+`reader.connect()` achieves the same power-cycle when you want a new card
+object.
+
 ### Devices
 
 High-level event-driven API.

@@ -67,7 +67,18 @@ export async function transmitWithAutoResponse(
     // Handle T=0 special status words
     const collectedData: Buffer[] = [];
 
+    // Guard against a misbehaving card that keeps returning 61/6C forever
+    // (e.g. repeated 6C with the same Le would otherwise loop indefinitely).
+    const MAX_ITERATIONS = 32;
+    let iterations = 0;
+
     while (response.length >= 2) {
+        if (++iterations > MAX_ITERATIONS) {
+            throw new Error(
+                `transmitWithAutoResponse exceeded ${MAX_ITERATIONS} GET RESPONSE/Le-retry iterations`
+            );
+        }
+
         const sw1 = response[response.length - 2];
         const sw2 = response[response.length - 1];
 
