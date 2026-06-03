@@ -1,6 +1,8 @@
 import type {
+    CardConstructor,
     ContextConstructor,
     NativeAddon,
+    ReaderConstructor,
     ReaderMonitorConstructor,
 } from './types';
 
@@ -9,8 +11,8 @@ const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
 
 // Re-export native classes
 export const Context = addon.Context as ContextConstructor;
-export const Reader = addon.Reader;
-export const Card = addon.Card;
+export const Reader = addon.Reader as ReaderConstructor;
+export const Card = addon.Card as CardConstructor;
 export const ReaderMonitor = addon.ReaderMonitor as ReaderMonitorConstructor;
 
 // Re-export constants

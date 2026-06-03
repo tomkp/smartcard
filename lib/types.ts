@@ -204,6 +204,14 @@ export interface ReaderMonitorConstructor {
     new (): ReaderMonitor;
 }
 
+export interface ReaderConstructor {
+    new (): Reader;
+}
+
+export interface CardConstructor {
+    new (): Card;
+}
+
 /**
  * Options for Devices class constructor (for dependency injection)
  */
@@ -227,8 +235,8 @@ export interface DevicesOptions {
  */
 export interface NativeAddon {
     Context: ContextConstructor;
-    Reader: unknown;
-    Card: unknown;
+    Reader: ReaderConstructor;
+    Card: CardConstructor;
     ReaderMonitor: ReaderMonitorConstructor;
     SCARD_SHARE_EXCLUSIVE: number;
     SCARD_SHARE_SHARED: number;
