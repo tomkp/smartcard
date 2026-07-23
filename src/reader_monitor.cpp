@@ -1,5 +1,6 @@
 #include "reader_monitor.h"
 #include "pcsc_errors.h"
+#include <cstdio>
 #include <cstring>
 #include <unordered_map>
 #include <memory>
@@ -11,6 +12,14 @@ static_assert(PCSC_STATE_PRESENT == SCARD_STATE_PRESENT,
               "PCSC_STATE_PRESENT in reader_state_utils.h must match the platform SCARD_STATE_PRESENT");
 
 Napi::FunctionReference ReaderMonitor::constructor;
+
+// Format a PC/SC error as "message (0xXXXXXXXX)" so the numeric code
+// survives to JS even when only the message string is consumed.
+static std::string FormatPCSCError(LONG code) {
+    char hex[16];
+    std::snprintf(hex, sizeof(hex), " (0x%08X)", static_cast<unsigned int>(static_cast<DWORD>(code)));
+    return std::string(GetPCSCErrorString(code)) + hex;
+}
 
 // Number of iterations between forced full state refreshes (Windows reliability fix)
 static const int STATE_REFRESH_INTERVAL = 10;
@@ -204,9 +213,17 @@ void ReaderMonitor::MonitorLoop() {
             iterationCount = 0;
             std::lock_guard<std::mutex> lock(mutex_);
 
-            // Get fresh state for all readers
+            // Get fresh state for all readers.
+            // Reserve the final size BEFORE taking any c_str() pointers:
+            // szReader is captured while names are still being appended, and
+            // a later push_back that reallocates the vector moves the
+            // strings. Short names within SSO capacity (15 chars on MSVC,
+            // e.g. "ACS ACR122 0") live inline in the string object, so the
+            // previously taken pointers dangle and SCardGetStatusChange
+            // reads garbage (ERROR_INVALID_PARAMETER / lost events).
             std::vector<SCARD_READERSTATE> refreshStates;
             std::vector<std::string> refreshNames;
+            refreshNames.reserve(readerStates_.size());
 
             for (const auto& pair : readerStates_) {
                 refreshNames.push_back(pair.first);
@@ -236,6 +253,13 @@ void ReaderMonitor::MonitorLoop() {
             std::lock_guard<std::mutex> lock(mutex_);
             states.clear();
             readerNames.clear();
+
+            // Reserve for all tracked readers + the PnP entry so no
+            // push_back reallocates after szReader pointers are taken
+            // (SSO strings move with the vector - see the refresh block
+            // above). With a single reader the PnP push_back below is
+            // otherwise guaranteed to reallocate on the first iteration.
+            readerNames.reserve(readerStates_.size() + 1);
 
             // Add known readers - use the map for name-based lookup
             for (const auto& pair : readerStates_) {
@@ -276,9 +300,12 @@ void ReaderMonitor::MonitorLoop() {
                 continue;
             }
 
-            // Build fresh state query for all readers
+            // Build fresh state query for all readers.
+            // Reserve before taking c_str() pointers - see the refresh
+            // block above (SSO strings move on vector reallocation).
             std::vector<SCARD_READERSTATE> freshStates;
             std::vector<std::string> freshNames;
+            freshNames.reserve(readerStates_.size());
 
             for (const auto& pair : readerStates_) {
                 freshNames.push_back(pair.first);
@@ -304,8 +331,38 @@ void ReaderMonitor::MonitorLoop() {
         }
 
         if (result != SCARD_S_SUCCESS) {
-            // Error - emit and continue
-            EmitEvent("error", GetPCSCErrorString(result), 0, {});
+            // Error - emit (with the numeric SCARD code) and continue
+            EmitEvent("error", FormatPCSCError(result), static_cast<DWORD>(result), {});
+
+            // Context-fatal errors (Smart Card service restart, dead handle):
+            // the existing context will never recover, so retrying it forever
+            // is pointless (Issue #119). Release it and re-establish before
+            // the next iteration. If re-establish fails, the next
+            // SCardGetStatusChange on the zeroed handle fails fast and we
+            // land back here - still one attempt per second.
+            DWORD ucode = static_cast<DWORD>(result);
+            if (ucode == SCARD_E_SERVICE_STOPPED ||
+                ucode == SCARD_E_NO_SERVICE ||
+                ucode == SCARD_E_INVALID_HANDLE ||
+                ucode == SCARD_E_INVALID_PARAMETER) {
+                if (contextValid_) {
+                    SCardReleaseContext(context_);
+                    contextValid_ = false;
+                }
+                context_ = 0;
+
+                LONG establishResult = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context_);
+                if (establishResult == SCARD_S_SUCCESS) {
+                    contextValid_ = true;
+                    // Reader states were tracked against the dead context - rebuild
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    UpdateReaderList();
+                } else {
+                    context_ = 0;
+                    EmitEvent("error", FormatPCSCError(establishResult), static_cast<DWORD>(establishResult), {});
+                }
+            }
+
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             continue;
         }
@@ -322,10 +379,14 @@ void ReaderMonitor::MonitorLoop() {
             // PnP notification - reader list changed
             if (readerNames[i] == "\\\\?PnP?\\Notification") {
                 pnpTriggered = true;
-                // Get old reader names
-                std::vector<std::string> oldNames;
+                // Snapshot per-reader state BEFORE the update. UpdateReaderList()
+                // re-seeds lastState from a fresh SCARD_STATE_UNAWARE query, which
+                // silently latches any card transition that happened during the
+                // PnP churn - the pnpTriggered skip below means the transition
+                // would otherwise never be emitted (Issue #119).
+                std::unordered_map<std::string, DWORD> oldStates;
                 for (const auto& pair : readerStates_) {
-                    oldNames.push_back(pair.first);
+                    oldStates[pair.first] = pair.second.lastState;
                 }
 
                 // Update reader list (this rebuilds readerStates_ map)
@@ -333,22 +394,37 @@ void ReaderMonitor::MonitorLoop() {
 
                 // Find new readers
                 for (const auto& pair : readerStates_) {
-                    bool found = false;
-                    for (const auto& old : oldNames) {
-                        if (old == pair.first) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
+                    if (oldStates.find(pair.first) == oldStates.end()) {
                         EmitEvent("reader-attached", pair.first, pair.second.lastState, pair.second.atr);
                     }
                 }
 
                 // Find removed readers
-                for (const auto& old : oldNames) {
-                    if (readerStates_.find(old) == readerStates_.end()) {
-                        EmitEvent("reader-detached", old, 0, {});
+                for (const auto& pair : oldStates) {
+                    if (readerStates_.find(pair.first) == readerStates_.end()) {
+                        EmitEvent("reader-detached", pair.first, 0, {});
+                    }
+                }
+
+                // Surviving readers: compare the snapshot against the freshly
+                // seeded state and emit any card transition that would otherwise
+                // be latched away (same divergence pattern as the periodic
+                // refresh above).
+                for (const auto& pair : readerStates_) {
+                    auto oldIt = oldStates.find(pair.first);
+                    if (oldIt == oldStates.end()) {
+                        continue;  // New reader - already emitted reader-attached
+                    }
+
+                    bool wasPresent = (oldIt->second & SCARD_STATE_PRESENT) != 0;
+                    bool isPresent = (pair.second.lastState & SCARD_STATE_PRESENT) != 0;
+
+                    if (wasPresent != isPresent) {
+                        if (isPresent) {
+                            EmitEvent("card-inserted", pair.first, pair.second.lastState, pair.second.atr);
+                        } else {
+                            EmitEvent("card-removed", pair.first, pair.second.lastState, {});
+                        }
                     }
                 }
                 continue;
@@ -383,6 +459,7 @@ void ReaderMonitor::UpdateReaderList() {
     }
 
     if (result != SCARD_S_SUCCESS) {
+        EmitEvent("error", FormatPCSCError(result), static_cast<DWORD>(result), {});
         return;
     }
 
@@ -391,6 +468,7 @@ void ReaderMonitor::UpdateReaderList() {
     result = SCardListReaders(context_, nullptr, buffer.data(), &readersLen);
 
     if (result != SCARD_S_SUCCESS) {
+        EmitEvent("error", FormatPCSCError(result), static_cast<DWORD>(result), {});
         return;
     }
 
