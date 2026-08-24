@@ -5,6 +5,11 @@
 #include <memory>
 #include "reader_state_utils.h"
 
+// reader_state_utils.h avoids including the PC/SC headers so it stays testable
+// in isolation; this pins its mirrored constant to the platform's value.
+static_assert(PCSC_STATE_PRESENT == SCARD_STATE_PRESENT,
+              "PCSC_STATE_PRESENT in reader_state_utils.h must match the platform SCARD_STATE_PRESENT");
+
 Napi::FunctionReference ReaderMonitor::constructor;
 
 // Number of iterations between forced full state refreshes (Windows reliability fix)
