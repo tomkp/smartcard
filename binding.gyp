@@ -1,4 +1,7 @@
 {
+    "variables": {
+        "build_tests%": "false"
+    },
     "targets": [{
         "target_name": "smartcard_napi",
         "cflags!": ["-fno-exceptions"],
@@ -23,7 +26,8 @@
                 "libraries": ["-lwinscard"],
                 "msvs_settings": {
                     "VCCLCompilerTool": {
-                        "ExceptionHandling": 1
+                        "ExceptionHandling": 1,
+                        "AdditionalOptions": ["/std:c++17"]
                     }
                 }
             }],
@@ -32,46 +36,53 @@
                 "xcode_settings": {
                     "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
                     "CLANG_CXX_LIBRARY": "libc++",
+                    "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
                     "MACOSX_DEPLOYMENT_TARGET": "10.15"
                 }
             }],
             ["OS=='linux'", {
                 "libraries": ["-lpcsclite"],
                 "include_dirs": ["/usr/include/PCSC"],
-                "cflags_cc": ["-fexceptions"]
-            }]
-        ]
-    },
-    {
-        "target_name": "smartcard_tests",
-        "type": "executable",
-        "sources": [
-            "src/test/test_main.cpp",
-            "src/test/reader_state_utils_test.cpp"
-        ],
-        "include_dirs": [
-            "src",
-            "src/test"
-        ],
-        "cflags_cc!": ["-fno-exceptions"],
-        "conditions": [
-            ["OS=='mac'", {
-                "xcode_settings": {
-                    "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
-                    "CLANG_CXX_LANGUAGE_STANDARD": "c++17"
-                }
-            }],
-            ["OS=='linux'", {
                 "cflags_cc": ["-std=c++17", "-fexceptions"]
-            }],
-            ["OS=='win'", {
-                "msvs_settings": {
-                    "VCCLCompilerTool": {
-                        "ExceptionHandling": 1,
-                        "AdditionalOptions": ["/std:c++17"]
-                    }
-                }
             }]
         ]
-    }]
+    }],
+    "conditions": [
+        ["build_tests=='true'", {
+            "targets": [{
+                "target_name": "smartcard_tests",
+                "type": "executable",
+                "sources": [
+                    "src/test/test_main.cpp",
+                    "src/test/reader_state_utils_test.cpp"
+                ],
+                "include_dirs": [
+                    "src"
+                ],
+                "cflags!": ["-fno-exceptions"],
+                "cflags_cc!": ["-fno-exceptions"],
+                "conditions": [
+                    ["OS=='win'", {
+                        "msvs_settings": {
+                            "VCCLCompilerTool": {
+                                "ExceptionHandling": 1,
+                                "AdditionalOptions": ["/std:c++17"]
+                            }
+                        }
+                    }],
+                    ["OS=='mac'", {
+                        "xcode_settings": {
+                            "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
+                            "CLANG_CXX_LIBRARY": "libc++",
+                            "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+                            "MACOSX_DEPLOYMENT_TARGET": "10.15"
+                        }
+                    }],
+                    ["OS=='linux'", {
+                        "cflags_cc": ["-std=c++17", "-fexceptions"]
+                    }]
+                ]
+            }]
+        }]
+    ]
 }
