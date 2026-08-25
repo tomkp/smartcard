@@ -145,6 +145,7 @@ export interface MonitorEvent {
         | 'reader-detached'
         | 'card-inserted'
         | 'card-removed'
+        | 'monitor-recovered'
         | 'error';
     reader: string;
     state: number;
