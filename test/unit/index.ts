@@ -1139,6 +1139,16 @@ describe('Package Exports (Issue #78)', () => {
             'import and require conditions should point to same file'
         );
     });
+
+    it('should expose the types subpath to legacy Node module resolution', () => {
+        const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
+
+        assert.deepStrictEqual(packageJson.typesVersions, {
+            '*': {
+                types: ['./dist/lib/types.d.ts'],
+            },
+        });
+    });
 });
 
 describe('Get Connected Cards (Issue #80)', () => {

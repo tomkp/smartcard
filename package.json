@@ -26,6 +26,11 @@
             "require": "./dist/lib/types.js"
         }
     },
+    "typesVersions": {
+        "*": {
+            "types": ["./dist/lib/types.d.ts"]
+        }
+    },
     "gypfile": true,
     "scripts": {
         "install": "node-gyp rebuild",
