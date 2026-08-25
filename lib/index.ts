@@ -5,7 +5,18 @@ import type {
 } from './types';
 
 // Load native addon
-const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
+let addon: NativeAddon;
+try {
+    addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
+} catch (err) {
+    throw new Error(
+        'smartcard: native addon not found at build/Release/smartcard_napi.node. ' +
+        'The addon is compiled by node-gyp during npm install. If your package manager ' +
+        'skips install scripts (bun requires "trustedDependencies": ["smartcard"]), or you ' +
+        'are bundling (mark smartcard as external), rebuild with: npm rebuild smartcard. ' +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`
+    );
+}
 
 // Re-export native classes
 export const Context = addon.Context as ContextConstructor;

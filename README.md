@@ -297,6 +297,20 @@ interface Card {
 }
 ```
 
+Reset a card in place with `reconnect` — no physical removal needed:
+
+```javascript
+const { SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0, SCARD_PROTOCOL_T1, SCARD_RESET_CARD, SCARD_UNPOWER_CARD } = require('smartcard');
+
+// Warm reset
+await card.reconnect(SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1, SCARD_RESET_CARD);
+
+// Cold reset (power off, then power back on)
+await card.reconnect(SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1, SCARD_UNPOWER_CARD);
+```
+
+`disconnect(disposition)` accepts the same constants to reset or unpower the card on the way out.
+
 ### Devices
 
 High-level event-driven API.
@@ -457,6 +471,30 @@ try {
 ### Build errors on Linux
 - Install development headers: `sudo apt-get install libpcsclite-dev`
 
+### "Could not resolve: ../../build/Release/smartcard_napi.node"
+The native addon is compiled by `node-gyp` during `npm install`. If the file is missing:
+- **Bun**: install scripts are skipped for untrusted packages — add `"trustedDependencies": ["smartcard"]` to your package.json and reinstall
+- **Bundlers** (esbuild, webpack, electrobun): native addons can't be bundled — mark `smartcard` as external so the require happens at runtime
+- Rebuild manually: `npm rebuild smartcard`
+
+### Docker & containers
+The library talks to the PC/SC daemon. Either mount the host daemon's socket:
+
+```dockerfile
+# In the image (libpcsclite-dev is needed at npm install time to build the addon)
+RUN apt-get install -y libpcsclite1
+```
+
+```bash
+docker run -v /var/run/pcscd:/var/run/pcscd myapp
+```
+
+Or run `pcscd` inside the container with USB passthrough:
+
+```bash
+docker run --privileged -v /dev/bus/usb:/dev/bus/usb myapp
+```
+
 ## Migrating from v1.x
 
 Version 2.0 is a complete rewrite using N-API for stability across Node.js versions.
@@ -516,5 +554,4 @@ MIT
 
 ## Related Projects
 
-- [nfc-pcsc](https://www.npmjs.com/package/nfc-pcsc) - NFC library built on smartcard
 - [emv](https://github.com/tomkp/emv) - Interactive EMV chip card explorer built on smartcard. Features a terminal UI for discovering payment applications, reading card data, verifying PINs, and exploring EMV tag structures. Supports GET PROCESSING OPTIONS, application cryptogram generation (ARQC/TC), and Dynamic Data Authentication (DDA).
