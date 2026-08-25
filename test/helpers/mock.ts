@@ -337,6 +337,12 @@ export class MockReaderMonitor implements ReaderMonitor {
             }
         }
     }
+
+    emitError(message: string): void {
+        if (this._running) {
+            this._emitEvent('error', message, 0, null);
+        }
+    }
 }
 
 interface MockAddon {

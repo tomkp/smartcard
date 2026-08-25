@@ -50,6 +50,7 @@ export class Devices extends EventEmitter {
     private _running = false;
     private _readers = new Map<string, ReaderStateInternal>();
     private _eventQueue: Promise<void> = Promise.resolve();
+    private _generation = 0;
 
     // Dependencies (can be injected for testing)
     private _Context: ContextConstructor;
@@ -89,6 +90,9 @@ export class Devices extends EventEmitter {
             // Create context for card connections
             this._context = new this._Context();
 
+            // A rejected queue from a previous session must not block this one
+            this._eventQueue = Promise.resolve();
+
             // Create native monitor
             this._monitor = new this._ReaderMonitor();
             this._running = true;
@@ -107,6 +111,9 @@ export class Devices extends EventEmitter {
      */
     stop(): void {
         this._running = false;
+        // Invalidate in-flight handlers parked on an await: a handler that
+        // resumes after this stop (or a later restart) must not touch state
+        this._generation++;
 
         if (this._monitor) {
             try {
@@ -182,10 +189,26 @@ export class Devices extends EventEmitter {
      * Queues events to prevent race conditions when multiple events arrive concurrently
      */
     private _handleEvent(event: MonitorEvent): void {
-        // Chain this event onto the queue to serialize processing
-        this._eventQueue = this._eventQueue.then(() =>
-            this._processEvent(event)
-        );
+        // Chain this event onto the queue to serialize processing. The catch
+        // keeps the chain alive: a rejected link would otherwise silently
+        // stop all future event processing.
+        this._eventQueue = this._eventQueue
+            .then(() => this._processEvent(event))
+            .catch((err) => this._safeEmitError(err));
+    }
+
+    /**
+     * Emit an error without killing the event pump: with no 'error' listener
+     * EventEmitter throws, which would reject the event queue and stop all
+     * future event processing.
+     */
+    private _safeEmitError(err: unknown): void {
+        if (this.listenerCount('error') > 0) {
+            this.emit(
+                'error',
+                err instanceof Error ? err : new Error(String(err))
+            );
+        }
     }
 
     /**
@@ -310,42 +333,77 @@ export class Devices extends EventEmitter {
 
         state.hasCard = true;
 
+        const generation = this._generation;
+
         // Try to connect to the card
         try {
-            const readers = this._context!.listReaders();
-            const reader = readers.find((r) => r.name === readerName);
-
-            if (reader) {
-                let nativeCard: Card;
-                try {
-                    // First try with both T=0 and T=1 protocols
-                    nativeCard = await reader.connect(
-                        this._SCARD_SHARE_SHARED,
-                        this._SCARD_PROTOCOL_T0 | this._SCARD_PROTOCOL_T1
-                    );
-                } catch (dualProtocolErr) {
-                    // If dual protocol fails with unresponsive card error,
-                    // fallback to T=0 only (issue #34)
-                    if (isUnresponsiveCardError(dualProtocolErr as Error)) {
-                        nativeCard = await reader.connect(
-                            this._SCARD_SHARE_SHARED,
-                            this._SCARD_PROTOCOL_T0
-                        );
-                    } else {
-                        // Re-throw if it's a different error
-                        throw dualProtocolErr;
+            // The reader list can lag the monitor event during PnP churn -
+            // retry briefly before giving up (Issue #117)
+            let reader: Reader | undefined;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                if (attempt > 0) {
+                    await new Promise((resolve) => setTimeout(resolve, 50));
+                    // Bail if monitoring stopped or restarted while we slept
+                    if (!this._running || this._generation !== generation) {
+                        return;
                     }
                 }
-
-                // Wrap the native card to add autoGetResponse support
-                const card = wrapCard(nativeCard);
-                state.card = card;
-
-                this.emit('card-inserted', {
-                    reader: { name: readerName, state: eventState, atr: atr },
-                    card: card,
-                });
+                const readers = this._context
+                    ? this._context.listReaders()
+                    : [];
+                reader = readers.find((r) => r.name === readerName);
+                if (reader) {
+                    break;
+                }
             }
+
+            if (!reader) {
+                // Reader vanished mid-churn: leave no half-state behind - the
+                // queued reader-detached will finish the cleanup
+                state.hasCard = false;
+                return;
+            }
+
+            let nativeCard: Card;
+            try {
+                // First try with both T=0 and T=1 protocols
+                nativeCard = await reader.connect(
+                    this._SCARD_SHARE_SHARED,
+                    this._SCARD_PROTOCOL_T0 | this._SCARD_PROTOCOL_T1
+                );
+            } catch (dualProtocolErr) {
+                // If dual protocol fails with unresponsive card error,
+                // fallback to T=0 only (issue #34)
+                if (isUnresponsiveCardError(dualProtocolErr as Error)) {
+                    nativeCard = await reader.connect(
+                        this._SCARD_SHARE_SHARED,
+                        this._SCARD_PROTOCOL_T0
+                    );
+                } else {
+                    // Re-throw if it's a different error
+                    throw dualProtocolErr;
+                }
+            }
+
+            if (!this._running || this._generation !== generation) {
+                // stop() ran while connect was in flight - it cannot see this
+                // card, so release the handle here
+                try {
+                    nativeCard.disconnect();
+                } catch {
+                    // Ignore disconnect errors
+                }
+                return;
+            }
+
+            // Wrap the native card to add autoGetResponse support
+            const card = wrapCard(nativeCard);
+            state.card = card;
+
+            this.emit('card-inserted', {
+                reader: { name: readerName, state: eventState, atr: atr },
+                card: card,
+            });
         } catch (err) {
             // Emit error but don't fail
             this.emit('error', err as Error);
