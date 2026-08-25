@@ -15,4 +15,8 @@ if (result.error) {
     process.exit(1);
 }
 
+if (result.signal) {
+    console.error(`${binary} was killed by signal ${result.signal}`);
+}
+
 process.exit(result.status === null ? 1 : result.status);

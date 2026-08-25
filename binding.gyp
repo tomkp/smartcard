@@ -1,6 +1,6 @@
 {
     "variables": {
-        "build_tests%": "false"
+        "smartcard_build_tests%": "false"
     },
     "targets": [{
         "target_name": "smartcard_napi",
@@ -48,7 +48,7 @@
         ]
     }],
     "conditions": [
-        ["build_tests=='true'", {
+        ["smartcard_build_tests=='true'", {
             "targets": [{
                 "target_name": "smartcard_tests",
                 "type": "executable",
