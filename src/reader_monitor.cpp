@@ -3,6 +3,12 @@
 #include <cstring>
 #include <unordered_map>
 #include <memory>
+#include "reader_state_utils.h"
+
+// reader_state_utils.h avoids including the PC/SC headers so it stays testable
+// in isolation; this pins its mirrored constant to the platform's value.
+static_assert(PCSC_STATE_PRESENT == SCARD_STATE_PRESENT,
+              "PCSC_STATE_PRESENT in reader_state_utils.h must match the platform SCARD_STATE_PRESENT");
 
 Napi::FunctionReference ReaderMonitor::constructor;
 
@@ -137,6 +143,43 @@ Napi::Value ReaderMonitor::GetIsRunning(const Napi::CallbackInfo& info) {
     return Napi::Boolean::New(info.Env(), running_.load());
 }
 
+// Single commit point for card state transitions: all three detection paths
+// (main wait, timeout re-query, periodic refresh) must apply identical
+// masking, ATR, and event rules or their stored states drift apart.
+void ReaderMonitor::ApplyCardStateChange(ReaderInfo& info, const std::string& readerName,
+                                         const SCARD_READERSTATE& readerState) {
+    DWORD newState = readerState.dwEventState & ~SCARD_STATE_CHANGED;
+    CardEvent event = DetectCardStateChange(info.lastState, newState);
+
+    // Commit so a stale lastState can't make the next SCardGetStatusChange
+    // re-report the same change - but never store SCARD_STATE_IGNORE (fed
+    // back as dwCurrentState it excludes the reader from future waits), and
+    // don't absorb an unknown/empty no-event result: the PnP path handles
+    // vanished readers.
+    bool unusable = readerState.dwEventState == 0 ||
+                    (newState & SCARD_STATE_UNKNOWN) != 0;
+    if (event != CardEvent::None || !unusable) {
+        info.lastState = newState & ~SCARD_STATE_IGNORE;
+    }
+
+    if (event == CardEvent::Inserted) {
+        // cbAtr comes from the PC/SC service; clamp to the actual buffer size
+        DWORD atrLen = readerState.cbAtr;
+        if (atrLen > sizeof(readerState.rgbAtr)) {
+            atrLen = sizeof(readerState.rgbAtr);
+        }
+        std::vector<uint8_t> atr;
+        if (atrLen > 0) {
+            atr.assign(readerState.rgbAtr, readerState.rgbAtr + atrLen);
+        }
+        info.atr = atr;
+        EmitEvent("card-inserted", readerName, newState, atr);
+    } else if (event == CardEvent::Removed) {
+        info.atr = {};
+        EmitEvent("card-removed", readerName, newState, {});
+    }
+}
+
 void ReaderMonitor::MonitorLoop() {
     // Get initial reader list
     UpdateReaderList();
@@ -181,29 +224,7 @@ void ReaderMonitor::MonitorLoop() {
                         const std::string& name = refreshNames[i];
                         auto it = readerStates_.find(name);
                         if (it != readerStates_.end()) {
-                            DWORD oldState = it->second.lastState;
-                            DWORD newState = refreshStates[i].dwEventState & ~SCARD_STATE_CHANGED;
-
-                            bool wasPresent = (oldState & SCARD_STATE_PRESENT) != 0;
-                            bool isPresent = (newState & SCARD_STATE_PRESENT) != 0;
-
-                            if (wasPresent != isPresent) {
-                                // State diverged - emit missed event
-                                std::vector<uint8_t> atr;
-                                if (refreshStates[i].cbAtr > 0) {
-                                    atr.assign(refreshStates[i].rgbAtr,
-                                              refreshStates[i].rgbAtr + refreshStates[i].cbAtr);
-                                }
-
-                                it->second.lastState = newState;
-                                it->second.atr = atr;
-
-                                if (isPresent) {
-                                    EmitEvent("card-inserted", name, newState, atr);
-                                } else {
-                                    EmitEvent("card-removed", name, newState, {});
-                                }
-                            }
+                            ApplyCardStateChange(it->second, name, refreshStates[i]);
                         }
                     }
                 }
@@ -276,28 +297,7 @@ void ReaderMonitor::MonitorLoop() {
                 const std::string& name = freshNames[i];
                 auto it = readerStates_.find(name);
                 if (it != readerStates_.end()) {
-                    DWORD freshState = freshStates[i].dwEventState & ~SCARD_STATE_CHANGED;
-                    DWORD storedState = it->second.lastState;
-
-                    bool wasPresent = (storedState & SCARD_STATE_PRESENT) != 0;
-                    bool isPresent = (freshState & SCARD_STATE_PRESENT) != 0;
-
-                    if (wasPresent != isPresent) {
-                        std::vector<uint8_t> atr;
-                        if (freshStates[i].cbAtr > 0) {
-                            atr.assign(freshStates[i].rgbAtr,
-                                      freshStates[i].rgbAtr + freshStates[i].cbAtr);
-                        }
-
-                        it->second.lastState = freshState;
-                        it->second.atr = atr;
-
-                        if (isPresent) {
-                            EmitEvent("card-inserted", name, freshState, atr);
-                        } else {
-                            EmitEvent("card-removed", name, freshState, {});
-                        }
-                    }
+                    ApplyCardStateChange(it->second, name, freshStates[i]);
                 }
             }
             continue;
@@ -366,28 +366,7 @@ void ReaderMonitor::MonitorLoop() {
             auto it = readerStates_.find(readerName);
 
             if (it != readerStates_.end()) {
-                DWORD oldState = it->second.lastState;
-                DWORD newState = states[i].dwEventState;
-
-                bool wasPresent = (oldState & SCARD_STATE_PRESENT) != 0;
-                bool isPresent = (newState & SCARD_STATE_PRESENT) != 0;
-
-                // Get ATR
-                std::vector<uint8_t> atr;
-                if (states[i].cbAtr > 0) {
-                    atr.assign(states[i].rgbAtr, states[i].rgbAtr + states[i].cbAtr);
-                }
-
-                // Update stored state using the map
-                it->second.lastState = newState & ~SCARD_STATE_CHANGED;
-                it->second.atr = atr;
-
-                // Emit appropriate event
-                if (!wasPresent && isPresent) {
-                    EmitEvent("card-inserted", readerName, newState, atr);
-                } else if (wasPresent && !isPresent) {
-                    EmitEvent("card-removed", readerName, newState, {});
-                }
+                ApplyCardStateChange(it->second, readerName, states[i]);
             }
         }
     }
