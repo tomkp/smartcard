@@ -2036,3 +2036,98 @@ describe('Windows Card Event State Tracking (Issue #111)', () => {
         devices.stop();
     });
 });
+
+describe('Insertion retry and event queue resilience (Issue #117)', () => {
+    it('should retry the reader lookup when the list lags the event', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
+        const mockReader = new MockReader('ACR122U');
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        // Reader list lags the monitor event: empty on the first call after
+        // insertion, populated afterwards
+        let lagging = false;
+        const realListReaders = mockContext.listReaders.bind(mockContext);
+        mockContext.listReaders = () => {
+            if (lagging) {
+                lagging = false;
+                return [];
+            }
+            return realListReaders();
+        };
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const events: { reader: ReaderEventInfo; card: Card }[] = [];
+        devices.on(
+            'card-inserted',
+            (event: { reader: ReaderEventInfo; card: Card }) =>
+                events.push(event)
+        );
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        lagging = true;
+        mockMonitor.insertCard('ACR122U', mockCard);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        assert.strictEqual(events.length, 1);
+        assert.strictEqual(events[0].reader.name, 'ACR122U');
+        assert(events[0].card);
+
+        devices.stop();
+    });
+
+    it('should keep processing events after an error event with no error listener', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
+        const mockReader = new MockReader('ACR122U');
+        const mockContext = new MockContext();
+        const mockMonitor = new MockReaderMonitor();
+
+        mockContext.addReader(mockReader);
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return mockContext;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        // Deliberately no 'error' listener: the emit throws inside the
+        // queue, which previously poisoned it and stopped all later events
+        const devices = new MockDevices();
+        const events: { reader: ReaderEventInfo; card: Card }[] = [];
+        devices.on(
+            'card-inserted',
+            (event: { reader: ReaderEventInfo; card: Card }) =>
+                events.push(event)
+        );
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        mockMonitor.emitError('Service not available (0x8010001D)');
+        mockMonitor.insertCard('ACR122U', mockCard);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        assert.strictEqual(events.length, 1);
+        assert.strictEqual(events[0].reader.name, 'ACR122U');
+
+        devices.stop();
+    });
+});
