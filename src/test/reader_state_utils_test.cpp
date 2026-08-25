@@ -2,13 +2,19 @@
 #include "catch.hpp"
 #include "reader_state_utils.h"
 
+TEST_CASE("PCSC_STATE_PRESENT matches the PC/SC SCARD_STATE_PRESENT value", "[state]") {
+    // Pinned to the literal so a typo in the constant fails here instead of
+    // silently inverting every card event.
+    REQUIRE(PCSC_STATE_PRESENT == 0x00000020);
+}
+
 TEST_CASE("DetectCardStateChange", "[state]") {
     SECTION("returns Inserted when card becomes present") {
-        REQUIRE(DetectCardStateChange(0x00, PCSC_STATE_PRESENT) == CardEvent::Inserted);
+        REQUIRE(DetectCardStateChange(0x00, 0x00000020) == CardEvent::Inserted);
     }
 
     SECTION("returns Removed when card becomes absent") {
-        REQUIRE(DetectCardStateChange(PCSC_STATE_PRESENT, 0x00) == CardEvent::Removed);
+        REQUIRE(DetectCardStateChange(0x00000020, 0x00) == CardEvent::Removed);
     }
 
     SECTION("returns None when state unchanged - no card") {

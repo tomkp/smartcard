@@ -4,7 +4,7 @@
 
 enum class CardEvent { None, Inserted, Removed };
 
-constexpr uint32_t PCSC_STATE_PRESENT = 0x00000010;
+constexpr uint32_t PCSC_STATE_PRESENT = 0x00000020;
 
 inline CardEvent DetectCardStateChange(uint32_t oldState, uint32_t newState) {
     bool wasPresent = (oldState & PCSC_STATE_PRESENT) != 0;
