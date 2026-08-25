@@ -62,7 +62,7 @@ Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
     DWORD readersLen = 0;
     LONG result = SCardListReaders(context_, nullptr, nullptr, &readersLen);
 
-    if (result == SCARD_E_NO_READERS_AVAILABLE) {
+    if (result == static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE)) {
         // No readers - return empty array
         return Napi::Array::New(env, 0);
     }
@@ -164,7 +164,7 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
         DWORD readersLen = 0;
         LONG result = SCardListReaders(context_, nullptr, nullptr, &readersLen);
 
-        if (result == SCARD_E_NO_READERS_AVAILABLE) {
+        if (result == static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE)) {
             // Add PnP notification to detect when readers are attached
             readerNames.push_back("\\\\?PnP?\\Notification");
             currentStates.push_back(SCARD_STATE_UNAWARE);
@@ -200,7 +200,7 @@ Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
     }
 
     LONG result = SCardCancel(context_);
-    if (result != SCARD_S_SUCCESS && result != SCARD_E_INVALID_HANDLE) {
+    if (result != SCARD_S_SUCCESS && result != static_cast<LONG>(SCARD_E_INVALID_HANDLE)) {
         Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
     }
 
