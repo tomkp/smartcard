@@ -227,8 +227,8 @@ export interface DevicesOptions {
  */
 export interface NativeAddon {
     Context: ContextConstructor;
-    Reader: unknown;
-    Card: unknown;
+    Reader: abstract new () => Reader;
+    Card: abstract new () => Card;
     ReaderMonitor: ReaderMonitorConstructor;
     SCARD_SHARE_EXCLUSIVE: number;
     SCARD_SHARE_SHARED: number;

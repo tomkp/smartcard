@@ -1,6 +1,8 @@
 import type {
+    Card as CardInterface,
     ContextConstructor,
     NativeAddon,
+    Reader as ReaderInterface,
     ReaderMonitorConstructor,
 } from './types';
 
@@ -20,8 +22,8 @@ try {
 
 // Re-export native classes
 export const Context = addon.Context as ContextConstructor;
-export const Reader = addon.Reader;
-export const Card = addon.Card;
+export const Reader: abstract new () => ReaderInterface = addon.Reader;
+export const Card: abstract new () => CardInterface = addon.Card;
 export const ReaderMonitor = addon.ReaderMonitor as ReaderMonitorConstructor;
 
 // Re-export constants

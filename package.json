@@ -19,6 +19,16 @@
             "types": "./dist/lib/index.d.ts",
             "import": "./dist/lib/index.js",
             "require": "./dist/lib/index.js"
+        },
+        "./types": {
+            "types": "./dist/lib/types.d.ts",
+            "import": "./dist/lib/types.js",
+            "require": "./dist/lib/types.js"
+        }
+    },
+    "typesVersions": {
+        "*": {
+            "types": ["./dist/lib/types.d.ts"]
         }
     },
     "gypfile": true,
