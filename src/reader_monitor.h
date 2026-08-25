@@ -55,6 +55,7 @@ private:
     // Internal methods
     void MonitorLoop();
     void UpdateReaderList();
+    void ResyncReaderList();
     void EmitEvent(const std::string& eventType, const std::string& readerName,
                    DWORD state, const std::vector<uint8_t>& atr);
     void ApplyCardStateChange(ReaderInfo& info, const std::string& readerName,

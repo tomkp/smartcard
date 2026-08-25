@@ -215,10 +215,36 @@ export class Devices extends EventEmitter {
                 this._handleCardRemoved(readerName);
                 break;
 
+            case 'monitor-recovered':
+                // The native monitor re-established its PC/SC context after a
+                // service restart; ours died with the same restart - replace it.
+                this._recreateContext();
+                break;
+
             case 'error':
                 // readerName contains error message for error events
                 this.emit('error', new Error(readerName));
                 break;
+        }
+    }
+
+    /**
+     * Replace the PC/SC context after the native monitor recovered from a
+     * service restart (the old handle is dead).
+     */
+    private _recreateContext(): void {
+        if (this._context) {
+            try {
+                this._context.close();
+            } catch {
+                // Dead context - nothing left to release
+            }
+        }
+        try {
+            this._context = new this._Context();
+        } catch (err) {
+            this._context = null;
+            this.emit('error', err instanceof Error ? err : new Error(String(err)));
         }
     }
 
