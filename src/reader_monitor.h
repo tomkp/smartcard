@@ -3,6 +3,7 @@
 #include <napi.h>
 #include <thread>
 #include <atomic>
+#include <memory>
 #include <vector>
 #include <string>
 #include <mutex>
@@ -37,12 +38,16 @@ private:
     std::atomic<bool> running_;
     std::mutex mutex_;
 
-    // Thread-safe function for emitting events
+    // Thread-safe function for emitting events. tsfnActive_ tracks whether
+    // tsfn_ holds a live handle that still needs Release().
     Napi::ThreadSafeFunction tsfn_;
+    bool tsfnActive_;
 
     // Current known reader states (Issue #111: keyed by reader name for reliable lookup)
     struct ReaderInfo {
         DWORD lastState;
+        // Cached for reader-attached emissions; seeded by UpdateReaderList
+        // and kept coherent on transitions by ApplyCardStateChange
         std::vector<uint8_t> atr;
     };
     std::unordered_map<std::string, ReaderInfo> readerStates_;
@@ -53,9 +58,10 @@ private:
     Napi::Value GetIsRunning(const Napi::CallbackInfo& info);
 
     // Internal methods
-    void MonitorLoop();
+    void MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive);
     void UpdateReaderList();
     void ResyncReaderList();
+    void RefreshAllReaderStates();
     void EmitEvent(const std::string& eventType, const std::string& readerName,
                    DWORD state, const std::vector<uint8_t>& atr);
     void ApplyCardStateChange(ReaderInfo& info, const std::string& readerName,

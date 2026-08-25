@@ -171,7 +171,7 @@ export class MockReader implements Reader {
     constructor(name: string, card: MockCard | null = null) {
         this.name = name;
         this._card = card;
-        this._state = card ? 0x122 : 0x12; // PRESENT or EMPTY
+        this._state = card ? 0x120 : 0x10; // PRESENT|INUSE or EMPTY (CHANGED masked, matching the native monitor)
     }
 
     get state(): number {
@@ -199,7 +199,7 @@ export class MockReader implements Reader {
 
     insertCard(card: MockCard): void {
         this._card = card;
-        this._state = 0x122;
+        this._state = 0x120;
     }
 
     removeCard(): void {
@@ -207,7 +207,7 @@ export class MockReader implements Reader {
             this._card.disconnect();
         }
         this._card = null;
-        this._state = 0x12;
+        this._state = 0x10;
     }
 }
 
