@@ -50,7 +50,8 @@ ReaderMonitor::ReaderMonitor(const Napi::CallbackInfo& info)
     : Napi::ObjectWrap<ReaderMonitor>(info),
       context_(0),
       contextValid_(false),
-      running_(false) {
+      running_(false),
+      tsfnActive_(false) {
 }
 
 ReaderMonitor::~ReaderMonitor() {
@@ -66,6 +67,14 @@ ReaderMonitor::~ReaderMonitor() {
         if (monitorThread_.joinable()) {
             monitorThread_.join();
         }
+    }
+
+    // A monitor destroyed without stop() would otherwise leak the tsfn,
+    // keeping the event loop referenced and letting its finalizer run
+    // after this object is gone
+    if (tsfnActive_) {
+        tsfn_.Release();
+        tsfnActive_ = false;
     }
 
     if (contextValid_) {
@@ -97,6 +106,13 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
     }
     contextValid_ = true;
 
+    // Per-session liveness flag. The tsfn finalizer runs asynchronously on a
+    // later event-loop tick, so after a same-tick stop()/start() a stale
+    // finalizer from the previous session must only be able to kill its own
+    // session - clearing running_ directly here would silently stop the new
+    // monitor thread and leave its std::thread joinable but never joined.
+    auto sessionActive = std::make_shared<std::atomic<bool>>(true);
+
     // Create thread-safe function
     tsfn_ = Napi::ThreadSafeFunction::New(
         env,
@@ -104,15 +120,16 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
         "ReaderMonitor",
         0,    // Unlimited queue size
         1,    // 1 initial thread
-        [this](Napi::Env) {
-            // Invoke destructor callback - called when tsfn is released
-            running_ = false;
+        [sessionActive](Napi::Env) {
+            // Called when the tsfn is released (stop() or env teardown)
+            sessionActive->store(false);
         }
     );
+    tsfnActive_ = true;
 
     // Start monitoring
     running_ = true;
-    monitorThread_ = std::thread(&ReaderMonitor::MonitorLoop, this);
+    monitorThread_ = std::thread(&ReaderMonitor::MonitorLoop, this, sessionActive);
 
     return env.Undefined();
 }
@@ -143,6 +160,7 @@ Napi::Value ReaderMonitor::Stop(const Napi::CallbackInfo& info) {
 
     // Release thread-safe function
     tsfn_.Release();
+    tsfnActive_ = false;
 
     // Release context
     if (contextValid_) {
@@ -185,19 +203,15 @@ void ReaderMonitor::ApplyCardStateChange(ReaderInfo& info, const std::string& re
         if (atrLen > sizeof(readerState.rgbAtr)) {
             atrLen = sizeof(readerState.rgbAtr);
         }
-        std::vector<uint8_t> atr;
-        if (atrLen > 0) {
-            atr.assign(readerState.rgbAtr, readerState.rgbAtr + atrLen);
-        }
-        info.atr = atr;
-        EmitEvent("card-inserted", readerName, newState, atr);
+        info.atr.assign(readerState.rgbAtr, readerState.rgbAtr + atrLen);
+        EmitEvent("card-inserted", readerName, newState, info.atr);
     } else if (event == CardEvent::Removed) {
-        info.atr = {};
+        info.atr.clear();
         EmitEvent("card-removed", readerName, newState, {});
     }
 }
 
-void ReaderMonitor::MonitorLoop() {
+void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive) {
     // Get initial reader list
     UpdateReaderList();
 
@@ -214,46 +228,13 @@ void ReaderMonitor::MonitorLoop() {
     std::vector<std::string> readerNames;
     int iterationCount = 0;
 
-    while (running_) {
+    while (running_ && sessionActive->load()) {
         // Periodic full state refresh to handle Windows PC/SC state drift (Issue #111)
         // This ensures we don't miss events if the state tracking gets out of sync
         if (++iterationCount >= STATE_REFRESH_INTERVAL) {
             iterationCount = 0;
             std::lock_guard<std::mutex> lock(mutex_);
-
-            // Get fresh state for all readers.
-            // Reserve the final size BEFORE taking any c_str() pointers:
-            // szReader is captured while names are still being appended, and
-            // a later push_back that reallocates the vector moves the
-            // strings. Short names within SSO capacity (15 chars on MSVC,
-            // e.g. "ACS ACR122 0") live inline in the string object, so the
-            // previously taken pointers dangle and SCardGetStatusChange
-            // reads garbage (ERROR_INVALID_PARAMETER / lost events).
-            std::vector<SCARD_READERSTATE> refreshStates;
-            std::vector<std::string> refreshNames;
-            refreshNames.reserve(readerStates_.size());
-
-            for (const auto& pair : readerStates_) {
-                refreshNames.push_back(pair.first);
-                SCARD_READERSTATE state = {};
-                state.szReader = refreshNames.back().c_str();
-                state.dwCurrentState = SCARD_STATE_UNAWARE;  // Force fresh state
-                refreshStates.push_back(state);
-            }
-
-            if (!refreshStates.empty()) {
-                LONG refreshResult = SCardGetStatusChange(context_, 0, refreshStates.data(), refreshStates.size());
-                if (refreshResult == SCARD_S_SUCCESS) {
-                    // Check for state divergence and emit missed events
-                    for (size_t i = 0; i < refreshStates.size(); i++) {
-                        const std::string& name = refreshNames[i];
-                        auto it = readerStates_.find(name);
-                        if (it != readerStates_.end()) {
-                            ApplyCardStateChange(it->second, name, refreshStates[i]);
-                        }
-                    }
-                }
-            }
+            RefreshAllReaderStates();
         }
 
         // Build states array using reader names from our map
@@ -289,7 +270,7 @@ void ReaderMonitor::MonitorLoop() {
         // Wait for changes (with 1 second timeout for periodic refresh)
         LONG result = SCardGetStatusChange(context_, 1000, states.data(), states.size());
 
-        if (!running_) {
+        if (!running_ || !sessionActive->load()) {
             break;
         }
 
@@ -303,38 +284,7 @@ void ReaderMonitor::MonitorLoop() {
             // rather than reflecting actual hardware state. We must explicitly
             // query with SCARD_STATE_UNAWARE to get the real current state.
             std::lock_guard<std::mutex> lock(mutex_);
-
-            if (readerStates_.empty()) {
-                continue;
-            }
-
-            // Build fresh state query for all readers.
-            // Reserve before taking c_str() pointers - see the refresh
-            // block above (SSO strings move on vector reallocation).
-            std::vector<SCARD_READERSTATE> freshStates;
-            std::vector<std::string> freshNames;
-            freshNames.reserve(readerStates_.size());
-
-            for (const auto& pair : readerStates_) {
-                freshNames.push_back(pair.first);
-                SCARD_READERSTATE state = {};
-                state.szReader = freshNames.back().c_str();
-                state.dwCurrentState = SCARD_STATE_UNAWARE;
-                freshStates.push_back(state);
-            }
-
-            LONG freshResult = SCardGetStatusChange(context_, 0, freshStates.data(), freshStates.size());
-            if (freshResult != SCARD_S_SUCCESS) {
-                continue;
-            }
-
-            for (size_t i = 0; i < freshStates.size(); i++) {
-                const std::string& name = freshNames[i];
-                auto it = readerStates_.find(name);
-                if (it != readerStates_.end()) {
-                    ApplyCardStateChange(it->second, name, freshStates[i]);
-                }
-            }
+            RefreshAllReaderStates();
             continue;
         }
 
@@ -386,25 +336,19 @@ void ReaderMonitor::MonitorLoop() {
 
         // Process changes - use reader name for lookup (Issue #111 fix)
         std::lock_guard<std::mutex> lock(mutex_);
-        bool pnpTriggered = false;
 
         for (size_t i = 0; i < states.size(); i++) {
             if (!(states[i].dwEventState & SCARD_STATE_CHANGED)) {
                 continue;
             }
 
-            // PnP notification - reader list changed
+            // PnP notification - reader list changed. The PnP entry is
+            // always pushed last, and ResyncReaderList rebuilds the map, so
+            // stop here: any entry processed after it would apply stale
+            // states[] data against the rebuilt map.
             if (readerNames[i] == "\\\\?PnP?\\Notification") {
-                pnpTriggered = true;
                 ResyncReaderList();
-                continue;
-            }
-
-            // Skip reader state processing if PnP was triggered in this iteration
-            // The reader list has changed, so indices are no longer valid
-            // We'll pick up any card changes on the next iteration with fresh state
-            if (pnpTriggered) {
-                continue;
+                break;
             }
 
             // Reader state change - look up by name, not index (Issue #111 fix)
@@ -414,6 +358,41 @@ void ReaderMonitor::MonitorLoop() {
             if (it != readerStates_.end()) {
                 ApplyCardStateChange(it->second, readerName, states[i]);
             }
+        }
+    }
+}
+
+// Re-query every tracked reader with SCARD_STATE_UNAWARE and commit/emit any
+// missed transitions - the shared body of the periodic refresh and the
+// timeout re-query (Issue #111). Caller holds mutex_.
+void ReaderMonitor::RefreshAllReaderStates() {
+    if (readerStates_.empty()) {
+        return;
+    }
+
+    // Reserve before taking c_str() pointers: a reallocating push_back moves
+    // SSO strings and dangles every previously captured szReader
+    std::vector<SCARD_READERSTATE> states;
+    std::vector<std::string> names;
+    names.reserve(readerStates_.size());
+    states.reserve(readerStates_.size());
+
+    for (const auto& pair : readerStates_) {
+        names.push_back(pair.first);
+        SCARD_READERSTATE state = {};
+        state.szReader = names.back().c_str();
+        state.dwCurrentState = SCARD_STATE_UNAWARE;  // Force fresh state
+        states.push_back(state);
+    }
+
+    if (SCardGetStatusChange(context_, 0, states.data(), states.size()) != SCARD_S_SUCCESS) {
+        return;
+    }
+
+    for (size_t i = 0; i < states.size(); i++) {
+        auto it = readerStates_.find(names[i]);
+        if (it != readerStates_.end()) {
+            ApplyCardStateChange(it->second, names[i], states[i]);
         }
     }
 }
