@@ -146,14 +146,26 @@ void ReaderMonitor::ApplyCardStateChange(ReaderInfo& info, const std::string& re
     DWORD newState = readerState.dwEventState & ~SCARD_STATE_CHANGED;
     CardEvent event = DetectCardStateChange(info.lastState, newState);
 
-    // Commit even when no card event occurred: a stale lastState would make
-    // the next SCardGetStatusChange re-report the same non-presence change.
-    info.lastState = newState;
+    // Commit so a stale lastState can't make the next SCardGetStatusChange
+    // re-report the same change - but never store SCARD_STATE_IGNORE (fed
+    // back as dwCurrentState it excludes the reader from future waits), and
+    // don't absorb an unknown/empty no-event result: the PnP path handles
+    // vanished readers.
+    bool unusable = readerState.dwEventState == 0 ||
+                    (newState & SCARD_STATE_UNKNOWN) != 0;
+    if (event != CardEvent::None || !unusable) {
+        info.lastState = newState & ~SCARD_STATE_IGNORE;
+    }
 
     if (event == CardEvent::Inserted) {
+        // cbAtr comes from the PC/SC service; clamp to the actual buffer size
+        DWORD atrLen = readerState.cbAtr;
+        if (atrLen > sizeof(readerState.rgbAtr)) {
+            atrLen = sizeof(readerState.rgbAtr);
+        }
         std::vector<uint8_t> atr;
-        if (readerState.cbAtr > 0) {
-            atr.assign(readerState.rgbAtr, readerState.rgbAtr + readerState.cbAtr);
+        if (atrLen > 0) {
+            atr.assign(readerState.rgbAtr, readerState.rgbAtr + atrLen);
         }
         info.atr = atr;
         EmitEvent("card-inserted", readerName, newState, atr);
