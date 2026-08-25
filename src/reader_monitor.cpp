@@ -6,10 +6,8 @@
 #include <memory>
 #include "reader_state_utils.h"
 
-// reader_state_utils.h avoids including the PC/SC headers so it stays testable
-// in isolation; this pins its mirrored constant to the platform's value.
-static_assert(PCSC_STATE_PRESENT == SCARD_STATE_PRESENT,
-              "PCSC_STATE_PRESENT in reader_state_utils.h must match the platform SCARD_STATE_PRESENT");
+using smartcard::CardEvent;
+using smartcard::DetectCardStateChange;
 
 Napi::FunctionReference ReaderMonitor::constructor;
 
@@ -184,7 +182,7 @@ Napi::Value ReaderMonitor::GetIsRunning(const Napi::CallbackInfo& info) {
 void ReaderMonitor::ApplyCardStateChange(ReaderInfo& info, const std::string& readerName,
                                          const SCARD_READERSTATE& readerState) {
     DWORD newState = readerState.dwEventState & ~SCARD_STATE_CHANGED;
-    CardEvent event = DetectCardStateChange(info.lastState, newState);
+    CardEvent event = DetectCardStateChange(info.lastState, newState, SCARD_STATE_PRESENT);
 
     // Commit so a stale lastState can't make the next SCardGetStatusChange
     // re-report the same change - but never store SCARD_STATE_IGNORE (fed
@@ -428,7 +426,7 @@ void ReaderMonitor::ResyncReaderList() {
         if (oldIt == oldStates.end()) {
             continue;  // New reader - reader-attached already emitted
         }
-        CardEvent event = DetectCardStateChange(oldIt->second, pair.second.lastState);
+        CardEvent event = DetectCardStateChange(oldIt->second, pair.second.lastState, SCARD_STATE_PRESENT);
         if (event == CardEvent::Inserted) {
             EmitEvent("card-inserted", pair.first, pair.second.lastState, pair.second.atr);
         } else if (event == CardEvent::Removed) {
