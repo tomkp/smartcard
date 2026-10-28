@@ -2223,7 +2223,81 @@ describe('T=0 status word regressions', () => {
                 }),
             /round-trips/
         );
-        assert.ok(calls <= 300, `Should stop after the cap, made ${calls} calls`);
+        assert.ok(calls <= 20, `Should stop after the cap, made ${calls} calls`);
+    });
+
+    it('should return an uncorrectable 6Cxx instead of resending it', async () => {
+        const sent: Buffer[] = [];
+        // Extended-length Case 2: correctLeInCommand can't place the Le
+        const card = scriptedCard([Buffer.from([0x6c, 0x80])], sent);
+
+        const response = await transmitWithAutoResponse(
+            card,
+            Buffer.from('00b00000000100', 'hex'),
+            { autoGetResponse: true }
+        );
+
+        assert.strictEqual(sent.length, 1, 'Must not resend the same command');
+        assert.strictEqual(response.toString('hex'), '6c80');
+    });
+
+    it('should collect long chains of small chunks', async () => {
+        const chunk = Buffer.alloc(16, 0xab);
+        const chunks = 320; // ~5KB, more round-trips than any fixed cap of 256
+        const responses = [Buffer.from([0x61, 0x10])];
+        for (let i = 0; i < chunks; i++) {
+            responses.push(Buffer.concat([chunk, Buffer.from([0x61, 0x10])]));
+        }
+        responses.push(Buffer.concat([chunk, Buffer.from([0x90, 0x00])]));
+        const card = scriptedCard(responses, []);
+
+        const response = await transmitWithAutoResponse(
+            card,
+            Buffer.from('00ca9f7f00', 'hex'),
+            { autoGetResponse: true }
+        );
+
+        assert.strictEqual(response.length, (chunks + 1) * chunk.length + 2);
+        assert.strictEqual(response.subarray(-2).toString('hex'), '9000');
+    });
+
+    it('should reject a chain that exceeds the largest possible response', async () => {
+        let calls = 0;
+        const card = {
+            transmit: async () => {
+                calls++;
+                return Buffer.concat([Buffer.alloc(256), Buffer.from([0x61, 0x00])]);
+            },
+        } as unknown as Card;
+
+        await assert.rejects(
+            () =>
+                transmitWithAutoResponse(card, Buffer.from('00b0000000', 'hex'), {
+                    autoGetResponse: true,
+                }),
+            /65536 bytes/
+        );
+        assert.ok(calls <= 260, `Should stop at 64KB, made ${calls} calls`);
+    });
+
+    it('should reject a card that keeps asking for a different Le', async () => {
+        let calls = 0;
+        const card = {
+            transmit: async () => {
+                calls++;
+                // Alternates, so each correction really changes the command
+                return Buffer.from([0x6c, calls % 2 ? 0x0a : 0x0b]);
+            },
+        } as unknown as Card;
+
+        await assert.rejects(
+            () =>
+                transmitWithAutoResponse(card, Buffer.from('00b0000005', 'hex'), {
+                    autoGetResponse: true,
+                }),
+            /round-trips/
+        );
+        assert.ok(calls <= 20, `Should stop after the cap, made ${calls} calls`);
     });
 });
 

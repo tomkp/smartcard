@@ -8,12 +8,17 @@
 import type { Card, TransmitOptions } from './types';
 
 /**
- * Maximum 61xx/6Cxx round-trips in a single transmit. Each GET RESPONSE
- * returns at most 256 bytes, so this bounds a response chain at 64KB while
- * a card stuck returning 61xx fails instead of looping (and growing the
- * collected data) forever.
+ * Most data a 61xx chain may collect: no response APDU can carry more than
+ * 65536 bytes, however small the chunks a card returns them in.
  */
-const MAX_T0_RESPONSE_CHAIN = 256;
+const MAX_T0_RESPONSE_BYTES = 65536;
+
+/**
+ * Most consecutive round-trips that collect no data (bare 61xx, or 6Cxx
+ * corrections), so a card stuck repeating a status word fails instead of
+ * looping forever.
+ */
+const MAX_T0_IDLE_ROUND_TRIPS = 16;
 
 /**
  * Build a GET RESPONSE APDU command (00 C0 00 00 Le)
@@ -92,7 +97,8 @@ export async function transmitWithAutoResponse(
     // 6C corrects the command actually on the wire - after a GET RESPONSE
     // that is the GET RESPONSE itself, not the original command
     let lastCommand = cmdBuffer;
-    let roundTrips = 0;
+    let collectedBytes = 0;
+    let idleRoundTrips = 0;
 
     while (response.length >= 2) {
         const sw1 = response[response.length - 2];
@@ -103,25 +109,43 @@ export async function transmitWithAutoResponse(
             break;
         }
 
-        if (++roundTrips > MAX_T0_RESPONSE_CHAIN) {
-            throw new Error(
-                `T=0 response chain exceeded ${MAX_T0_RESPONSE_CHAIN} round-trips ` +
-                    `(card keeps returning SW1=${sw1.toString(16)})`
-            );
-        }
-
+        let nextCommand: Buffer;
         if (sw1 === 0x61) {
             // SW1=61: More data available, send GET RESPONSE
             // Collect any data before the status word
             if (response.length > 2) {
                 collectedData.push(response.subarray(0, response.length - 2));
+                collectedBytes += response.length - 2;
+                idleRoundTrips = 0;
+            } else {
+                idleRoundTrips++;
             }
-            lastCommand = buildGetResponseCommand(sw2);
+            if (collectedBytes > MAX_T0_RESPONSE_BYTES) {
+                throw new Error(
+                    `T=0 response chain exceeded ${MAX_T0_RESPONSE_BYTES} bytes`
+                );
+            }
+            nextCommand = buildGetResponseCommand(sw2);
         } else {
             // SW1=6C: Wrong Le, retry the last command with the correct value
-            lastCommand = correctLeInCommand(lastCommand, sw2);
+            nextCommand = correctLeInCommand(lastCommand, sw2);
+            if (nextCommand.equals(lastCommand)) {
+                // Nothing to correct (extended-length or malformed command,
+                // or the card asked for the Le it already had): resending
+                // would only repeat the 6Cxx, so return it to the caller
+                break;
+            }
+            idleRoundTrips++;
         }
 
+        if (idleRoundTrips > MAX_T0_IDLE_ROUND_TRIPS) {
+            throw new Error(
+                `T=0 response chain made no progress in ${MAX_T0_IDLE_ROUND_TRIPS} ` +
+                    `round-trips (card keeps returning SW1=${sw1.toString(16)})`
+            );
+        }
+
+        lastCommand = nextCommand;
         response = await card.transmit(lastCommand, options);
     }
 
