@@ -2230,11 +2230,11 @@ describe('T=0 status word regressions', () => {
 describe('Native error code mapping', () => {
     const {
         toPCSCError,
+        createPCSCError,
         PCSCError,
         CardRemovedError,
-        SharingViolationError,
+        ServiceNotRunningError,
     } = require('../../lib/errors');
-    const { wrapCard } = require('../../lib/card-wrapper');
     const { isUnresponsiveCardError } = require('../../lib/devices');
 
     function codedError(message: string, code: number): Error {
@@ -2267,18 +2267,52 @@ describe('Native error code mapping', () => {
         assert.strictEqual(wrapped.message, 'string failure');
     });
 
-    it('should throw typed errors from wrapped card methods', async () => {
-        const nativeCard = {
-            transmit: async () => {
-                throw codedError('Sharing violation', 0x8010000b);
-            },
-        } as unknown as Card;
+    it('should leave numeric codes outside the PC/SC range alone', () => {
+        // e.g. a DOMException AbortError (20) thrown by a listener
+        const foreign = codedError('aborted', 20);
+        assert.strictEqual(toPCSCError(foreign), foreign);
+    });
 
-        const card = wrapCard(nativeCard);
-        await assert.rejects(
-            () => card.transmit([0x00, 0xa4, 0x04, 0x00]),
-            SharingViolationError
-        );
+    it('should accept PC/SC codes in signed form', () => {
+        // 0x80100069 as a signed 32-bit integer
+        const typed = toPCSCError(codedError('Card was removed', 0x80100069 | 0));
+        assert.ok(typed instanceof CardRemovedError);
+        assert.strictEqual(typed.code, 0x80100069);
+    });
+
+    it('should map a stopped service to ServiceNotRunningError, keeping its code', () => {
+        const typed = createPCSCError('PC/SC service stopped', 0x8010001e);
+        assert.ok(typed instanceof ServiceNotRunningError);
+        assert.strictEqual(typed.code, 0x8010001e);
+    });
+
+    it('should throw typed errors from the native addon', () => {
+        // Real addon, no reader needed: where no PC/SC service runs (CI)
+        // Context() itself fails, elsewhere a closed context refuses to list
+        const { Context } = require('../../lib/index');
+        let err: unknown;
+        try {
+            const ctx = new Context();
+            ctx.close();
+            ctx.listReaders();
+        } catch (e) {
+            err = e;
+        }
+        assert.ok(err instanceof PCSCError, `expected a PCSCError, got ${String(err)}`);
+    });
+
+    it('should emit typed errors for coded monitor error events', async () => {
+        const { devices, monitor } = createTestSetup();
+        const errors: Error[] = [];
+        devices.on('error', (err: Error) => errors.push(err));
+
+        devices.start();
+        monitor.emitError('PC/SC service not running (0x8010001D)', 0x8010001d);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        devices.stop();
+
+        assert.strictEqual(errors.length, 1);
+        assert.ok(errors[0] instanceof ServiceNotRunningError);
     });
 
     it('should detect unresponsive cards by code, not message text', () => {

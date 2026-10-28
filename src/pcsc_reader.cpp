@@ -1,6 +1,7 @@
 #include "pcsc_reader.h"
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
+#include "pcsc_napi_error.h"
 #include "async_workers.h"
 
 Napi::FunctionReference PCSCReader::constructor;
@@ -68,7 +69,7 @@ Napi::Value PCSCReader::Connect(const Napi::CallbackInfo& info) {
     // The context may have been closed since listReaders(); connecting on
     // its released handle would reach whatever PC/SC reassigned it to
     if (!context_ || !context_->IsValid()) {
-        Napi::Error::New(env, "Context is not valid").ThrowAsJavaScriptException();
+        NewInvalidHandleError(env, "Context is not valid").ThrowAsJavaScriptException();
         return env.Null();
     }
 

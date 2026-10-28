@@ -43,11 +43,12 @@ export class NoReadersError extends PCSCError {
 }
 
 /**
- * Error thrown when PC/SC service is not running
+ * Error thrown when PC/SC service is not running (SCARD_E_NO_SERVICE), or
+ * stopped while in use (SCARD_E_SERVICE_STOPPED)
  */
 export class ServiceNotRunningError extends PCSCError {
-    constructor(message = 'PC/SC service not running') {
-        super(message, 0x8010001d);
+    constructor(message = 'PC/SC service not running', code = 0x8010001d) {
+        super(message, code);
         this.name = 'ServiceNotRunningError';
     }
 }
@@ -62,7 +63,9 @@ export class SharingViolationError extends PCSCError {
     }
 }
 
-type PCSCErrorConstructor = new (message?: string) => PCSCError;
+type PCSCErrorConstructor = new (message?: string, code?: number) => PCSCError;
+
+export const SCARD_W_UNRESPONSIVE_CARD = 0x80100066;
 
 /**
  * PC/SC error codes mapped to specific error classes
@@ -72,6 +75,7 @@ const ERROR_CODE_MAP = new Map<number, PCSCErrorConstructor>([
     [0x8010000a, TimeoutError], // SCARD_E_TIMEOUT
     [0x8010002e, NoReadersError], // SCARD_E_NO_READERS_AVAILABLE
     [0x8010001d, ServiceNotRunningError], // SCARD_E_NO_SERVICE
+    [0x8010001e, ServiceNotRunningError], // SCARD_E_SERVICE_STOPPED
     [0x8010000b, SharingViolationError], // SCARD_E_SHARING_VIOLATION
 ]);
 
@@ -79,30 +83,45 @@ const ERROR_CODE_MAP = new Map<number, PCSCErrorConstructor>([
  * Factory function to create the appropriate error class based on PC/SC error code
  */
 export function createPCSCError(message: string, code: number): PCSCError {
-    const ErrorClass = ERROR_CODE_MAP.get(code);
+    // Accept codes as either signed or unsigned 32-bit values
+    const ucode = code >>> 0;
+    const ErrorClass = ERROR_CODE_MAP.get(ucode);
     if (ErrorClass) {
-        return new ErrorClass(message);
+        return new ErrorClass(message, ucode);
     }
-    return new PCSCError(message, code);
+    return new PCSCError(message, ucode);
 }
 
 /**
- * Upgrade an error from the native layer into the typed hierarchy.
+ * The PC/SC error code an error carries, as an unsigned value, or undefined
+ * if it has none. Only codes in the PC/SC facility (0x8010xxxx) count: other
+ * libraries' errors (DOMException, gRPC, ...) also have numeric codes.
+ */
+export function getPCSCErrorCode(err: unknown): number | undefined {
+    if (!(err instanceof Error)) {
+        return undefined;
+    }
+    const code = (err as Error & { code?: unknown }).code;
+    if (typeof code !== 'number' || !Number.isInteger(code) || code >>> 16 !== 0x8010) {
+        return undefined;
+    }
+    return code >>> 0;
+}
+
+/**
+ * Normalize an error into the typed hierarchy.
  *
- * Native PC/SC failures carry the numeric error code as a plain `code`
- * property; map those onto the PCSCError classes so instanceof checks work.
- * Errors without a numeric code pass through unchanged.
+ * The native layer already throws typed errors; this upgrades any other
+ * Error carrying a PC/SC `code` and wraps non-Error values. Everything else
+ * passes through unchanged.
  */
 export function toPCSCError(err: unknown): Error {
     if (err instanceof PCSCError) {
         return err;
     }
-    if (err instanceof Error) {
-        const code = (err as Error & { code?: unknown }).code;
-        if (typeof code === 'number') {
-            return createPCSCError(err.message, code);
-        }
-        return err;
+    const code = getPCSCErrorCode(err);
+    if (code !== undefined) {
+        return createPCSCError((err as Error).message, code);
     }
-    return new Error(String(err));
+    return err instanceof Error ? err : new Error(String(err));
 }

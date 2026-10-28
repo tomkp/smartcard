@@ -48,7 +48,7 @@ Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (!IsValid()) {
-        Napi::Error::New(env, "Context is not valid").ThrowAsJavaScriptException();
+        NewInvalidHandleError(env, "Context is not valid").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -115,7 +115,7 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (!IsValid()) {
-        Napi::Error::New(env, "Context is not valid").ThrowAsJavaScriptException();
+        NewInvalidHandleError(env, "Context is not valid").ThrowAsJavaScriptException();
         return env.Null();
     }
 

@@ -89,7 +89,7 @@ Napi::Value PCSCCard::Transmit(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (!IsConnected()) {
-        Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
+        NewInvalidHandleError(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -138,7 +138,7 @@ Napi::Value PCSCCard::Control(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (!IsConnected()) {
-        Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
+        NewInvalidHandleError(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -177,7 +177,7 @@ Napi::Value PCSCCard::GetStatus(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (!IsConnected()) {
-        Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
+        NewInvalidHandleError(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -230,7 +230,7 @@ Napi::Value PCSCCard::Reconnect(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (!IsConnected()) {
-        Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
+        NewInvalidHandleError(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
 

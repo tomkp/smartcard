@@ -3,13 +3,10 @@
  *
  * Wraps the native Card object to intercept transmit() calls and
  * automatically handle T=0 protocol status words when autoGetResponse is set.
- * Also upgrades native rejections (plain Errors carrying a numeric `code`)
- * into the typed PCSCError hierarchy.
  */
 
 import type { Card, CardStatus, TransmitOptions } from './types';
 import { transmitWithAutoResponse } from './t0-handler';
-import { toPCSCError } from './errors';
 
 /**
  * Wraps a native Card to add autoGetResponse support to transmit()
@@ -37,44 +34,24 @@ export class CardWrapper implements Card {
         command: Buffer | number[],
         options?: TransmitOptions
     ): Promise<Buffer> {
-        try {
-            if (options?.autoGetResponse) {
-                // Delegate to transmitWithAutoResponse for T=0 handling
-                return await transmitWithAutoResponse(
-                    this._nativeCard,
-                    command,
-                    options
-                );
-            }
-            // Pass through to native transmit
-            return await this._nativeCard.transmit(command, options);
-        } catch (err) {
-            throw toPCSCError(err);
+        if (options?.autoGetResponse) {
+            // Delegate to transmitWithAutoResponse for T=0 handling
+            return transmitWithAutoResponse(this._nativeCard, command, options);
         }
+        // Pass through to native transmit
+        return this._nativeCard.transmit(command, options);
     }
 
-    async control(code: number, data?: Buffer | number[]): Promise<Buffer> {
-        try {
-            return await this._nativeCard.control(code, data);
-        } catch (err) {
-            throw toPCSCError(err);
-        }
+    control(code: number, data?: Buffer | number[]): Promise<Buffer> {
+        return this._nativeCard.control(code, data);
     }
 
     getStatus(): CardStatus {
-        try {
-            return this._nativeCard.getStatus();
-        } catch (err) {
-            throw toPCSCError(err);
-        }
+        return this._nativeCard.getStatus();
     }
 
     disconnect(disposition?: number): void {
-        try {
-            return this._nativeCard.disconnect(disposition);
-        } catch (err) {
-            throw toPCSCError(err);
-        }
+        return this._nativeCard.disconnect(disposition);
     }
 
     async reconnect(
@@ -82,15 +59,7 @@ export class CardWrapper implements Card {
         protocol?: number,
         initialization?: number
     ): Promise<number> {
-        try {
-            return await this._nativeCard.reconnect(
-                shareMode,
-                protocol,
-                initialization
-            );
-        } catch (err) {
-            throw toPCSCError(err);
-        }
+        return this._nativeCard.reconnect(shareMode, protocol, initialization);
     }
 }
 

@@ -29,6 +29,7 @@ struct EventData {
     std::string readerName;
     DWORD state;
     std::vector<uint8_t> atr;
+    DWORD code;
 };
 
 Napi::Object ReaderMonitor::Init(Napi::Env env, Napi::Object exports) {
@@ -289,8 +290,9 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
 
         if (result != SCARD_S_SUCCESS) {
             // Error - emit and continue. The numeric code rides in the
-            // message; state stays 0 so the field keeps its bitmask meaning.
-            EmitEvent("error", FormatPCSCError(result), 0, {});
+            // event's code field (and the message, for message-only
+            // consumers); state stays 0 so it keeps its bitmask meaning.
+            EmitEvent("error", FormatPCSCError(result), 0, {}, static_cast<DWORD>(result));
 
             // Context-fatal errors (Smart Card service restart, dead handle):
             // the existing context will never recover, so retrying it forever
@@ -505,10 +507,10 @@ void ReaderMonitor::UpdateReaderList() {
 }
 
 void ReaderMonitor::EmitEvent(const std::string& eventType, const std::string& readerName,
-                               DWORD state, const std::vector<uint8_t>& atr) {
+                               DWORD state, const std::vector<uint8_t>& atr, DWORD code) {
     // Use shared_ptr to ensure memory is freed even if ThreadSafeFunction is released
     // before the callback executes (prevents memory leak)
-    auto data = std::make_shared<EventData>(EventData{eventType, readerName, state, atr});
+    auto data = std::make_shared<EventData>(EventData{eventType, readerName, state, atr, code});
 
     // Call JavaScript callback on main thread
     // Capture shared_ptr by value to extend lifetime until callback executes
@@ -523,6 +525,10 @@ void ReaderMonitor::EmitEvent(const std::string& eventType, const std::string& r
             event.Set("atr", Napi::Buffer<uint8_t>::Copy(env, ptr->atr.data(), ptr->atr.size()));
         } else {
             event.Set("atr", env.Null());
+        }
+
+        if (ptr->code != 0) {
+            event.Set("code", Napi::Number::New(env, ptr->code));
         }
 
         // Call the callback

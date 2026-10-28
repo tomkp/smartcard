@@ -287,10 +287,15 @@ export class MockReaderMonitor implements ReaderMonitor {
         type: MonitorEvent['type'],
         readerName: string,
         state: number,
-        atr: Buffer | null
+        atr: Buffer | null,
+        code?: number
     ): void {
         if (this._callback) {
-            this._callback({ type, reader: readerName, state, atr });
+            const event: MonitorEvent = { type, reader: readerName, state, atr };
+            if (code !== undefined) {
+                event.code = code;
+            }
+            this._callback(event);
         }
     }
 
@@ -338,9 +343,9 @@ export class MockReaderMonitor implements ReaderMonitor {
         }
     }
 
-    emitError(message: string): void {
+    emitError(message: string, code?: number): void {
         if (this._running) {
-            this._emitEvent('error', message, 0, null);
+            this._emitEvent('error', message, 0, null, code);
         }
     }
 }

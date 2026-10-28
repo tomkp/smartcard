@@ -12,11 +12,14 @@ import type {
     ReaderMonitorConstructor,
 } from './types';
 import { wrapCard } from './card-wrapper';
-import { toPCSCError } from './errors';
+import {
+    SCARD_W_UNRESPONSIVE_CARD,
+    createPCSCError,
+    getPCSCErrorCode,
+    toPCSCError,
+} from './errors';
 
 const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
-
-const SCARD_W_UNRESPONSIVE_CARD = 0x80100066;
 
 interface ReaderStateInternal {
     hasCard: boolean;
@@ -31,11 +34,11 @@ export function isUnresponsiveCardError(err: Error): boolean {
     if (!err) {
         return false;
     }
-    const code = (err as Error & { code?: unknown }).code;
-    if (typeof code === 'number') {
+    const code = getPCSCErrorCode(err);
+    if (code !== undefined) {
         return code === SCARD_W_UNRESPONSIVE_CARD;
     }
-    // No numeric code (test doubles, foreign errors): fall back to the message
+    // No PC/SC code (test doubles, foreign errors): fall back to the message
     if (typeof err.message !== 'string') {
         return false;
     }
@@ -244,10 +247,7 @@ export class Devices extends EventEmitter {
      */
     private _safeEmitError(err: unknown): void {
         if (this.listenerCount('error') > 0) {
-            this.emit(
-                'error',
-                err instanceof Error ? err : new Error(String(err))
-            );
+            this.emit('error', toPCSCError(err));
         }
     }
 
@@ -259,7 +259,7 @@ export class Devices extends EventEmitter {
             return;
         }
 
-        const { type, reader: readerName, state, atr } = event;
+        const { type, reader: readerName, state, atr, code } = event;
 
         switch (type) {
             case 'reader-attached':
@@ -286,7 +286,11 @@ export class Devices extends EventEmitter {
 
             case 'error':
                 // readerName contains error message for error events
-                this._safeEmitError(new Error(readerName));
+                this._safeEmitError(
+                    code !== undefined
+                        ? createPCSCError(readerName, code)
+                        : new Error(readerName)
+                );
                 break;
         }
     }
@@ -307,7 +311,7 @@ export class Devices extends EventEmitter {
             this._context = new this._Context();
         } catch (err) {
             this._context = null;
-            this._safeEmitError(toPCSCError(err));
+            this._safeEmitError(err);
         }
     }
 
@@ -446,7 +450,7 @@ export class Devices extends EventEmitter {
             });
         } catch (err) {
             // Emit error but don't fail
-            this._safeEmitError(toPCSCError(err));
+            this._safeEmitError(err);
         }
     }
 

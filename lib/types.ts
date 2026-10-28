@@ -150,6 +150,8 @@ export interface MonitorEvent {
     reader: string;
     state: number;
     atr: Buffer | null;
+    /** PC/SC error code, on 'error' events (whose `reader` holds the message) */
+    code?: number;
 }
 
 /**
@@ -227,6 +229,8 @@ export interface DevicesOptions {
  * Native addon interface
  */
 export interface NativeAddon {
+    /** Register the function native code uses to build PC/SC errors */
+    setErrorFactory(factory: (message: string, code: number) => Error): void;
     Context: ContextConstructor;
     Reader: abstract new () => Reader;
     Card: abstract new () => Card;
