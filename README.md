@@ -558,4 +558,5 @@ MIT
 
 ## Related Projects
 
+- [Card Spy](https://github.com/tomkp/card-spy) - Smartcard and NFC IDE for macOS, Windows and Linux, built on smartcard. Send APDUs from a console and trace every exchange with status words and TLV decoded, explore EMV payment applications and NFC tags, script cards in TypeScript, and work without hardware using recorded virtual cards. [Website and downloads](https://tomkp.github.io/card-spy/).
 - [emv](https://github.com/tomkp/emv) - Interactive EMV chip card explorer built on smartcard. Features a terminal UI for discovering payment applications, reading card data, verifying PINs, and exploring EMV tag structures. Supports GET PROCESSING OPTIONS, application cryptogram generation (ARQC/TC), and Dynamic Data Authentication (DDA).
