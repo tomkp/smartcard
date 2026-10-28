@@ -14,6 +14,7 @@ import {
     SlowMockReader,
     IntermittentFailureMockReader,
     UnstableMockCard,
+    SCARD_PROTOCOL_T1,
 } from '../helpers/mock';
 import type { Card, MonitorEvent, ReaderEventInfo } from '../../lib/types';
 
@@ -2419,12 +2420,17 @@ describe('Devices.start() failure rollback', () => {
 
     it('should stay retryable when the monitor fails to start', async () => {
         const monitor = new FailingOnceMonitor();
-        const context = new MockContext();
         const reader = new MockReader('Test Reader', null);
         monitor.attachReader(reader);
 
+        // A fresh context per start(), as the real addon gives: the rollback
+        // closes the first one, so a retry still using it would be broken
+        const contexts: MockContext[] = [];
         const MockDevices = createMockDevices({
             Context: function () {
+                const context = new MockContext();
+                context.addReader(reader);
+                contexts.push(context);
                 return context;
             } as unknown as new () => MockContext,
             ReaderMonitor: function () {
@@ -2435,11 +2441,14 @@ describe('Devices.start() failure rollback', () => {
         const devices = new MockDevices();
         const errors: Error[] = [];
         const attached: unknown[] = [];
+        const inserted: unknown[] = [];
         devices.on('error', (err: Error) => errors.push(err));
         devices.on('reader-attached', (r: unknown) => attached.push(r));
+        devices.on('card-inserted', (e: unknown) => inserted.push(e));
 
         devices.start();
         assert.strictEqual(errors.length, 1, 'First start should emit the error');
+        assert.strictEqual(contexts[0].isValid, false, 'Rollback should close the context');
 
         devices.start();
         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -2450,6 +2459,17 @@ describe('Devices.start() failure rollback', () => {
             'Second start() must reach the monitor again'
         );
         assert.strictEqual(attached.length, 1, 'Events must flow after retry');
+
+        // Card handling goes through the context, so this fails if the
+        // retry kept the closed one
+        monitor.insertCard(
+            'Test Reader',
+            new MockCard(SCARD_PROTOCOL_T1, Buffer.from([0x3b, 0x8f]))
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        assert.strictEqual(inserted.length, 1, 'Card events must work after retry');
+        assert.strictEqual(errors.length, 1, 'No errors after the retry');
 
         devices.stop();
     });
