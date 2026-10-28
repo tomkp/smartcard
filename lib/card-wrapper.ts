@@ -7,6 +7,8 @@
 
 import type { Card, CardStatus, TransmitOptions } from './types';
 import { transmitWithAutoResponse } from './t0-handler';
+// Only called at reconnect time, so the import cycle with devices is harmless
+import { isUnresponsiveCardError } from './devices';
 
 /**
  * Wraps a native Card to add autoGetResponse support to transmit()
@@ -59,7 +61,31 @@ export class CardWrapper implements Card {
         protocol?: number,
         initialization?: number
     ): Promise<number> {
-        return this._nativeCard.reconnect(shareMode, protocol, initialization);
+        const active = this._nativeCard.protocol;
+        try {
+            return await this._nativeCard.reconnect(
+                shareMode,
+                protocol,
+                initialization
+            );
+        } catch (err) {
+            // Some readers report a T=0-only card as unresponsive when T=1 is
+            // offered too - the quirk Devices works around on connect (issue
+            // #34). Offering T=0|T=1 (also the default) hits it on reconnect,
+            // so retry once with the protocol the card is already using.
+            if (
+                active &&
+                protocol !== active &&
+                isUnresponsiveCardError(err as Error)
+            ) {
+                return this._nativeCard.reconnect(
+                    shareMode,
+                    active,
+                    initialization
+                );
+            }
+            throw err;
+        }
     }
 }
 
