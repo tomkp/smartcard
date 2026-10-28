@@ -7,6 +7,15 @@
 
 import type { Card, CardStatus, TransmitOptions } from './types';
 import { transmitWithAutoResponse } from './t0-handler';
+// Only called at reconnect time, so the import cycle with devices is harmless
+import { isUnresponsiveCardError } from './devices';
+
+/**
+ * What the native layer offers when reconnect() is given no protocol.
+ * T=0 and T=1 are 1 and 2 in pcsc-lite, macOS and WinSCard alike (only RAW
+ * differs between them).
+ */
+const DEFAULT_PROTOCOLS = 0x1 | 0x2;
 
 /**
  * Wraps a native Card to add autoGetResponse support to transmit()
@@ -59,7 +68,44 @@ export class CardWrapper implements Card {
         protocol?: number,
         initialization?: number
     ): Promise<number> {
-        return this._nativeCard.reconnect(shareMode, protocol, initialization);
+        const active = this._nativeCard.protocol;
+        try {
+            return await this._nativeCard.reconnect(
+                shareMode,
+                protocol,
+                initialization
+            );
+        } catch (err) {
+            // Some reader and card combinations (issue #34: an SCR35xx with a
+            // T=0-only card) report the card unresponsive when a reset offers
+            // T=1 as well. Retry once with the protocol the card is already
+            // using, but only if the caller offered it. The failed attempt has
+            // usually reset the card already, so this resets it a second time.
+            const requested = protocol ?? DEFAULT_PROTOCOLS;
+            const offered = (requested & active) === active;
+            if (
+                !active ||
+                !offered ||
+                requested === active ||
+                !isUnresponsiveCardError(err as Error)
+            ) {
+                throw err;
+            }
+            try {
+                return await this._nativeCard.reconnect(
+                    shareMode,
+                    active,
+                    initialization
+                );
+            } catch (retryErr) {
+                // Report the failure of the call that was made; keep the
+                // fallback's failure as its cause
+                if (err instanceof Error && err.cause === undefined) {
+                    err.cause = retryErr;
+                }
+                throw err;
+            }
+        }
     }
 }
 

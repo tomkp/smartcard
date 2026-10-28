@@ -743,6 +743,103 @@ describe('Protocol Fallback (Issue #34)', () => {
     });
 });
 
+describe('Reconnect protocol fallback', () => {
+    const { wrapCard } = require('../../lib/card-wrapper');
+    const { SCARD_PROTOCOL_T0, SCARD_PROTOCOL_T1 } = require('../helpers/mock');
+    const T0 = SCARD_PROTOCOL_T0;
+    const T1 = SCARD_PROTOCOL_T1;
+    const T0_OR_T1 = SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1;
+    const RAW = 4;
+    const SHARED = 2;
+    const RESET = 1;
+
+    /**
+     * A card in `active` mode whose reconnect fails with each of `errors` in
+     * turn, then succeeds. Records the protocol and initialization of each call.
+     */
+    class ReconnectingCard extends MockCard {
+        calls: Array<{ protocol?: number; init?: number }> = [];
+        constructor(
+            active: number,
+            private _errors: string[]
+        ) {
+            super(active, Buffer.from([0x3b, 0x6b]));
+        }
+        async reconnect(
+            shareMode?: number,
+            protocol?: number,
+            init?: number
+        ): Promise<number> {
+            this.calls.push({ protocol, init });
+            const error = this._errors.shift();
+            if (error) {
+                throw new Error(error);
+            }
+            return super.reconnect(shareMode, protocol, init);
+        }
+    }
+
+    it('should retry with the active protocol when T=0|T=1 is unresponsive', async () => {
+        const native = new ReconnectingCard(T0, ['Card is unresponsive']);
+        const card = wrapCard(native);
+
+        assert.strictEqual(await card.reconnect(SHARED, T0_OR_T1, RESET), T0);
+        assert.deepStrictEqual(native.calls, [
+            { protocol: T0_OR_T1, init: RESET },
+            { protocol: T0, init: RESET },
+        ]);
+    });
+
+    it('should treat no protocol as T=0|T=1', async () => {
+        const native = new ReconnectingCard(T0, ['Card is unresponsive']);
+        const card = wrapCard(native);
+
+        assert.strictEqual(await card.reconnect(SHARED, undefined, RESET), T0);
+        assert.deepStrictEqual(native.calls, [
+            { protocol: undefined, init: RESET },
+            { protocol: T0, init: RESET },
+        ]);
+    });
+
+    it('should not retry when the active protocol was requested', async () => {
+        const native = new ReconnectingCard(T0, ['Card is unresponsive']);
+        const card = wrapCard(native);
+
+        await assert.rejects(card.reconnect(SHARED, T0, RESET), /unresponsive/);
+        assert.strictEqual(native.calls.length, 1);
+    });
+
+    it('should not retry with a protocol the caller did not offer', async () => {
+        const t0Card = new ReconnectingCard(T0, ['Card is unresponsive']);
+        await assert.rejects(wrapCard(t0Card).reconnect(SHARED, T1, RESET), /unresponsive/);
+        assert.strictEqual(t0Card.calls.length, 1);
+
+        const rawCard = new ReconnectingCard(RAW, ['Card is unresponsive']);
+        await assert.rejects(wrapCard(rawCard).reconnect(SHARED, T0_OR_T1, RESET), /unresponsive/);
+        assert.strictEqual(rawCard.calls.length, 1);
+    });
+
+    it('should rethrow other errors without retrying', async () => {
+        const native = new ReconnectingCard(T0, ['Sharing violation']);
+        const card = wrapCard(native);
+
+        await assert.rejects(card.reconnect(SHARED, T0_OR_T1, RESET), /Sharing violation/);
+        assert.strictEqual(native.calls.length, 1);
+    });
+
+    it('should report the original error when the retry fails too', async () => {
+        const native = new ReconnectingCard(T0, ['Card is unresponsive', 'Card was removed']);
+        const card = wrapCard(native);
+
+        await assert.rejects(card.reconnect(SHARED, T0_OR_T1, RESET), (err: Error) => {
+            assert.match(err.message, /unresponsive/);
+            assert.match((err.cause as Error).message, /removed/);
+            return true;
+        });
+        assert.strictEqual(native.calls.length, 2);
+    });
+});
+
 describe('Enhanced Mock Scenarios', () => {
     it('SlowMockReader should delay before connecting', async () => {
         const mockCard = new MockCard(1, Buffer.from([0x3b]));
