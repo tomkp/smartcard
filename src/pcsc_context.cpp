@@ -1,6 +1,7 @@
 #include "pcsc_context.h"
 #include "pcsc_reader.h"
 #include "pcsc_errors.h"
+#include "pcsc_napi_error.h"
 #include "async_workers.h"
 #include <cstring>
 
@@ -35,7 +36,7 @@ PCSCContext::PCSCContext(const Napi::CallbackInfo& info)
     LONG result = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context_);
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
         return;
     }
 
@@ -68,7 +69,7 @@ Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
     }
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -77,7 +78,7 @@ Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
     result = SCardListReaders(context_, nullptr, readersBuffer.data(), &readersLen);
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -108,7 +109,8 @@ Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
         }
         DWORD state = (result == SCARD_S_SUCCESS) ? states[i].dwEventState : 0;
 
-        Napi::Object reader = PCSCReader::NewInstance(env, context_, readerNames[i], state, atr);
+        Napi::Object reader = PCSCReader::NewInstance(
+            env, info.This().As<Napi::Object>(), context_, readerNames[i], state, atr);
         readers.Set(static_cast<uint32_t>(i), reader);
     }
 
@@ -186,7 +188,8 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     WaitForChangeWorker* worker = new WaitForChangeWorker(
-        env, context_, readerNames, currentStates, timeout, deferred);
+        env, info.This().As<Napi::Object>(), context_, readerNames, currentStates,
+        timeout, deferred);
     worker->Queue();
 
     return deferred.Promise();
@@ -201,7 +204,7 @@ Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
 
     LONG result = SCardCancel(context_);
     if (result != SCARD_S_SUCCESS && result != static_cast<LONG>(SCARD_E_INVALID_HANDLE)) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
     }
 
     return env.Undefined();

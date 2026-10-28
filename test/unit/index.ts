@@ -15,7 +15,7 @@ import {
     IntermittentFailureMockReader,
     UnstableMockCard,
 } from '../helpers/mock';
-import type { Card, ReaderEventInfo } from '../../lib/types';
+import type { Card, MonitorEvent, ReaderEventInfo } from '../../lib/types';
 
 describe('MockCard', () => {
     it('should create a mock card with protocol and ATR', () => {
@@ -1092,10 +1092,29 @@ describe('APDU Building Utilities (Issue #98)', () => {
             assert.deepStrictEqual(corrected, Buffer.from([0x00, 0xb0, 0x00, 0x00, 0x20]));
         });
 
-        it('should replace Le in Case 3/4 command (Lc + data + Le)', () => {
+        it('should replace Le in Case 4 command (Lc + data + Le)', () => {
             const cmd = Buffer.from([0x00, 0xa4, 0x04, 0x00, 0x02, 0xab, 0xcd, 0x00]);
             const corrected = correctLeInCommand(cmd, 0x30);
             assert.deepStrictEqual(corrected, Buffer.from([0x00, 0xa4, 0x04, 0x00, 0x02, 0xab, 0xcd, 0x30]));
+        });
+
+        it('should append Le to Case 3 command instead of overwriting data', () => {
+            // SELECT AID with Lc=7 and no Le - the last byte is data, not Le
+            const cmd = Buffer.from('00a4040007a0000000031010', 'hex');
+            const corrected = correctLeInCommand(cmd, 0x1c);
+            assert.deepStrictEqual(
+                corrected,
+                Buffer.from('00a4040007a00000000310101c', 'hex'),
+                'Le must be appended, never overwrite the last data byte'
+            );
+        });
+
+        it('should return unrecognized command structures unchanged', () => {
+            // Length matches neither Case 3 (5+Lc) nor Case 4 (5+Lc+1)
+            const cmd = Buffer.from([0x00, 0xa4, 0x04, 0x00, 0x02, 0xab]);
+            const corrected = correctLeInCommand(cmd, 0x30);
+            assert.deepStrictEqual(corrected, cmd);
+            assert.notStrictEqual(corrected, cmd, 'Should still be a copy');
         });
 
         it('should not modify original command buffer', () => {
@@ -2128,6 +2147,255 @@ describe('Insertion retry and event queue resilience (Issue #117)', () => {
         assert.strictEqual(events.length, 1);
         assert.strictEqual(events[0].reader.name, 'ACR122U');
 
+        devices.stop();
+    });
+});
+
+describe('T=0 status word regressions', () => {
+    const { transmitWithAutoResponse } = require('../../lib/t0-handler');
+
+    function scriptedCard(responses: Buffer[], sent: Buffer[]): Card {
+        return {
+            transmit: async (cmd: Buffer | number[]) => {
+                sent.push(Buffer.isBuffer(cmd) ? cmd : Buffer.from(cmd));
+                const next = responses.shift();
+                if (!next) {
+                    throw new Error('No scripted response left');
+                }
+                return next;
+            },
+        } as unknown as Card;
+    }
+
+    it('should retry the GET RESPONSE, not the original command, on 6C after 61', async () => {
+        const sent: Buffer[] = [];
+        const card = scriptedCard(
+            [
+                Buffer.from([0x61, 0x05]), // to the original READ BINARY
+                Buffer.from([0x6c, 0x0a]), // wrong Le on the GET RESPONSE
+                Buffer.from([0x11, 0x22, 0x90, 0x00]),
+            ],
+            sent
+        );
+
+        const response = await transmitWithAutoResponse(
+            card,
+            Buffer.from('00b0000005', 'hex'),
+            { autoGetResponse: true }
+        );
+
+        assert.strictEqual(sent[1].toString('hex'), '00c0000005');
+        assert.strictEqual(
+            sent[2].toString('hex'),
+            '00c000000a',
+            'Must re-send the corrected GET RESPONSE, not the original command'
+        );
+        assert.strictEqual(response.toString('hex'), '11229000');
+    });
+
+    it('should correct the original command on an initial 6C', async () => {
+        const sent: Buffer[] = [];
+        const card = scriptedCard(
+            [Buffer.from([0x6c, 0x0a]), Buffer.from([0xaa, 0x90, 0x00])],
+            sent
+        );
+
+        await transmitWithAutoResponse(card, Buffer.from('00b0000005', 'hex'), {
+            autoGetResponse: true,
+        });
+
+        assert.strictEqual(sent[1].toString('hex'), '00b000000a');
+    });
+
+    it('should reject instead of looping forever when the card keeps returning 61xx', async () => {
+        let calls = 0;
+        const card = {
+            transmit: async () => {
+                calls++;
+                return Buffer.from([0x61, 0x10]);
+            },
+        } as unknown as Card;
+
+        await assert.rejects(
+            () =>
+                transmitWithAutoResponse(card, Buffer.from('00b0000000', 'hex'), {
+                    autoGetResponse: true,
+                }),
+            /round-trips/
+        );
+        assert.ok(calls <= 300, `Should stop after the cap, made ${calls} calls`);
+    });
+});
+
+describe('Native error code mapping', () => {
+    const {
+        toPCSCError,
+        PCSCError,
+        CardRemovedError,
+        SharingViolationError,
+    } = require('../../lib/errors');
+    const { wrapCard } = require('../../lib/card-wrapper');
+    const { isUnresponsiveCardError } = require('../../lib/devices');
+
+    function codedError(message: string, code: number): Error {
+        const err = new Error(message) as Error & { code: number };
+        err.code = code;
+        return err;
+    }
+
+    it('should map a coded native error onto the typed hierarchy', () => {
+        const typed = toPCSCError(codedError('Card was removed', 0x80100069));
+        assert.ok(typed instanceof CardRemovedError);
+        assert.strictEqual(typed.message, 'Card was removed');
+        assert.strictEqual(typed.code, 0x80100069);
+    });
+
+    it('should map unknown codes to the PCSCError base class', () => {
+        const typed = toPCSCError(codedError('Unknown internal error', 0x80100014));
+        assert.ok(typed instanceof PCSCError);
+        assert.strictEqual(typed.code, 0x80100014);
+    });
+
+    it('should pass through errors without a numeric code', () => {
+        const plain = new Error('something else');
+        assert.strictEqual(toPCSCError(plain), plain);
+    });
+
+    it('should wrap non-Error values in an Error', () => {
+        const wrapped = toPCSCError('string failure');
+        assert.ok(wrapped instanceof Error);
+        assert.strictEqual(wrapped.message, 'string failure');
+    });
+
+    it('should throw typed errors from wrapped card methods', async () => {
+        const nativeCard = {
+            transmit: async () => {
+                throw codedError('Sharing violation', 0x8010000b);
+            },
+        } as unknown as Card;
+
+        const card = wrapCard(nativeCard);
+        await assert.rejects(
+            () => card.transmit([0x00, 0xa4, 0x04, 0x00]),
+            SharingViolationError
+        );
+    });
+
+    it('should detect unresponsive cards by code, not message text', () => {
+        assert.strictEqual(
+            isUnresponsiveCardError(codedError('some odd message', 0x80100066)),
+            true
+        );
+        // A misleading message must not override the actual code
+        assert.strictEqual(
+            isUnresponsiveCardError(
+                codedError('reader unresponsive during boot', 0x8010000b)
+            ),
+            false
+        );
+    });
+});
+
+describe('Devices.start() failure rollback', () => {
+    class FailingOnceMonitor extends MockReaderMonitor {
+        startAttempts = 0;
+
+        start(callback: (event: MonitorEvent) => void): void {
+            this.startAttempts++;
+            if (this.startAttempts === 1) {
+                throw new Error('PC/SC service not running');
+            }
+            super.start(callback);
+        }
+    }
+
+    it('should stay retryable when the monitor fails to start', async () => {
+        const monitor = new FailingOnceMonitor();
+        const context = new MockContext();
+        const reader = new MockReader('Test Reader', null);
+        monitor.attachReader(reader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return context;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return monitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const errors: Error[] = [];
+        const attached: unknown[] = [];
+        devices.on('error', (err: Error) => errors.push(err));
+        devices.on('reader-attached', (r: unknown) => attached.push(r));
+
+        devices.start();
+        assert.strictEqual(errors.length, 1, 'First start should emit the error');
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        assert.strictEqual(
+            monitor.startAttempts,
+            2,
+            'Second start() must reach the monitor again'
+        );
+        assert.strictEqual(attached.length, 1, 'Events must flow after retry');
+
+        devices.stop();
+    });
+
+    it('should throw from start() when there is no error listener', () => {
+        const monitor = new FailingOnceMonitor();
+        const context = new MockContext();
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return context;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return monitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        assert.throws(() => devices.start(), /service not running/);
+
+        // The failed attempt must not have latched _running
+        devices.start();
+        assert.strictEqual(monitor.startAttempts, 2);
+        devices.stop();
+    });
+
+    it('should stay retryable when Context creation fails', () => {
+        let contextCalls = 0;
+        const context = new MockContext();
+        const monitor = new MockReaderMonitor();
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                contextCalls++;
+                if (contextCalls === 1) {
+                    throw new Error('PC/SC service not running');
+                }
+                return context;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return monitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const errors: Error[] = [];
+        devices.on('error', (err: Error) => errors.push(err));
+
+        devices.start();
+        assert.strictEqual(errors.length, 1);
+        assert.strictEqual(monitor.isRunning, false);
+
+        devices.start();
+        assert.strictEqual(monitor.isRunning, true, 'Retry must succeed');
         devices.stop();
     });
 });

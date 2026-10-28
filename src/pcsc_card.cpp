@@ -1,5 +1,6 @@
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
+#include "pcsc_napi_error.h"
 #include "async_workers.h"
 #include <cstring>
 
@@ -124,7 +125,8 @@ Napi::Value PCSCCard::Transmit(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     TransmitWorker* worker = new TransmitWorker(
-        env, card_, protocol_, sendBuffer, maxRecvLength, deferred);
+        env, info.This().As<Napi::Object>(), card_, protocol_, sendBuffer,
+        maxRecvLength, deferred);
     worker->Queue();
 
     return deferred.Promise();
@@ -163,7 +165,7 @@ Napi::Value PCSCCard::Control(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     ControlWorker* worker = new ControlWorker(
-        env, card_, controlCode, sendBuffer, deferred);
+        env, info.This().As<Napi::Object>(), card_, controlCode, sendBuffer, deferred);
     worker->Queue();
 
     return deferred.Promise();
@@ -187,7 +189,7 @@ Napi::Value PCSCCard::GetStatus(const Napi::CallbackInfo& info) {
     LONG result = SCardStatus(card_, nullptr, &readerLen, &state, &protocol, atr, &atrLen);
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -216,7 +218,7 @@ Napi::Value PCSCCard::Disconnect(const Napi::CallbackInfo& info) {
     card_ = 0;
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
     }
 
     return env.Undefined();
@@ -248,7 +250,8 @@ Napi::Value PCSCCard::Reconnect(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     ReconnectWorker* worker = new ReconnectWorker(
-        env, card_, shareMode, preferredProtocols, initialization, &protocol_, deferred);
+        env, info.This().As<Napi::Object>(), card_, shareMode, preferredProtocols,
+        initialization, &protocol_, deferred);
     worker->Queue();
 
     return deferred.Promise();

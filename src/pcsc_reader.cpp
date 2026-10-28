@@ -20,12 +20,14 @@ Napi::Object PCSCReader::Init(Napi::Env env, Napi::Object exports) {
     return exports;
 }
 
-Napi::Object PCSCReader::NewInstance(Napi::Env env, SCARDCONTEXT context,
+Napi::Object PCSCReader::NewInstance(Napi::Env env, Napi::Object contextObj,
+                                      SCARDCONTEXT context,
                                       const std::string& name, DWORD state,
                                       const std::vector<uint8_t>& atr) {
     Napi::Object obj = constructor.New({});
     PCSCReader* reader = Napi::ObjectWrap<PCSCReader>::Unwrap(obj);
     reader->context_ = context;
+    reader->contextRef_ = Napi::Persistent(contextObj);
     reader->name_ = name;
     reader->state_ = state;
     reader->atr_ = atr;
@@ -82,7 +84,8 @@ Napi::Value PCSCReader::Connect(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     ConnectWorker* worker = new ConnectWorker(
-        env, context_, name_, shareMode, preferredProtocols, deferred);
+        env, info.This().As<Napi::Object>(), context_, name_, shareMode,
+        preferredProtocols, deferred);
     worker->Queue();
 
     return deferred.Promise();

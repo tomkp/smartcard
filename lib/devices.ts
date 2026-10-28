@@ -12,8 +12,11 @@ import type {
     ReaderMonitorConstructor,
 } from './types';
 import { wrapCard } from './card-wrapper';
+import { toPCSCError } from './errors';
 
 const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
+
+const SCARD_W_UNRESPONSIVE_CARD = 0x80100066;
 
 interface ReaderStateInternal {
     hasCard: boolean;
@@ -25,7 +28,15 @@ interface ReaderStateInternal {
  * Used to determine if we should fallback to T=0 protocol.
  */
 export function isUnresponsiveCardError(err: Error): boolean {
-    if (!err || typeof err.message !== 'string') {
+    if (!err) {
+        return false;
+    }
+    const code = (err as Error & { code?: unknown }).code;
+    if (typeof code === 'number') {
+        return code === SCARD_W_UNRESPONSIVE_CARD;
+    }
+    // No numeric code (test doubles, foreign errors): fall back to the message
+    if (typeof err.message !== 'string') {
         return false;
     }
     return err.message.toLowerCase().includes('unresponsive');
@@ -95,14 +106,43 @@ export class Devices extends EventEmitter {
 
             // Create native monitor
             this._monitor = new this._ReaderMonitor();
-            this._running = true;
 
             // Start native monitoring with callback
             this._monitor.start((event: MonitorEvent) => {
                 this._handleEvent(event);
             });
+
+            // Set only after everything succeeded, so a partial failure
+            // leaves start() retryable. Events queue as microtasks, so none
+            // is processed before this line runs.
+            this._running = true;
         } catch (err) {
-            this.emit('error', err as Error);
+            // Roll back whatever was created so a later start() can succeed
+            if (this._monitor) {
+                try {
+                    this._monitor.stop();
+                } catch {
+                    // Monitor never started
+                }
+                this._monitor = null;
+            }
+            if (this._context) {
+                try {
+                    this._context.close();
+                } catch {
+                    // Ignore close errors
+                }
+                this._context = null;
+            }
+
+            const error = toPCSCError(err);
+            if (this.listenerCount('error') > 0) {
+                this.emit('error', error);
+            } else {
+                // No listener: fail loudly to the caller instead of
+                // silently doing nothing - but only after the rollback above
+                throw error;
+            }
         }
     }
 
@@ -246,7 +286,7 @@ export class Devices extends EventEmitter {
 
             case 'error':
                 // readerName contains error message for error events
-                this.emit('error', new Error(readerName));
+                this._safeEmitError(new Error(readerName));
                 break;
         }
     }
@@ -267,7 +307,7 @@ export class Devices extends EventEmitter {
             this._context = new this._Context();
         } catch (err) {
             this._context = null;
-            this.emit('error', err instanceof Error ? err : new Error(String(err)));
+            this._safeEmitError(toPCSCError(err));
         }
     }
 
@@ -406,7 +446,7 @@ export class Devices extends EventEmitter {
             });
         } catch (err) {
             // Emit error but don't fail
-            this.emit('error', err as Error);
+            this._safeEmitError(toPCSCError(err));
         }
     }
 

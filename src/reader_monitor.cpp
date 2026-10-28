@@ -1,5 +1,6 @@
 #include "reader_monitor.h"
 #include "pcsc_errors.h"
+#include "pcsc_napi_error.h"
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
@@ -99,7 +100,7 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
     // Establish PC/SC context
     LONG result = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context_);
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
         return env.Undefined();
     }
     contextValid_ = true;

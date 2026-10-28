@@ -85,3 +85,24 @@ export function createPCSCError(message: string, code: number): PCSCError {
     }
     return new PCSCError(message, code);
 }
+
+/**
+ * Upgrade an error from the native layer into the typed hierarchy.
+ *
+ * Native PC/SC failures carry the numeric error code as a plain `code`
+ * property; map those onto the PCSCError classes so instanceof checks work.
+ * Errors without a numeric code pass through unchanged.
+ */
+export function toPCSCError(err: unknown): Error {
+    if (err instanceof PCSCError) {
+        return err;
+    }
+    if (err instanceof Error) {
+        const code = (err as Error & { code?: unknown }).code;
+        if (typeof code === 'number') {
+            return createPCSCError(err.message, code);
+        }
+        return err;
+    }
+    return new Error(String(err));
+}

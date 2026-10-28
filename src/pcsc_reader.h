@@ -8,7 +8,8 @@
 class PCSCReader : public Napi::ObjectWrap<PCSCReader> {
 public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
-    static Napi::Object NewInstance(Napi::Env env, SCARDCONTEXT context,
+    static Napi::Object NewInstance(Napi::Env env, Napi::Object contextObj,
+                                     SCARDCONTEXT context,
                                      const std::string& name, DWORD state,
                                      const std::vector<uint8_t>& atr);
 
@@ -28,6 +29,10 @@ private:
 
     std::string name_;
     SCARDCONTEXT context_;
+    // context_ is borrowed from the PCSCContext that created this reader;
+    // this reference keeps that object (and so the handle) alive while the
+    // reader - or a ConnectWorker pinning the reader - still uses it
+    Napi::ObjectReference contextRef_;
     DWORD state_;
     std::vector<uint8_t> atr_;
 

@@ -75,6 +75,7 @@ export {
     ServiceNotRunningError,
     SharingViolationError,
     createPCSCError,
+    toPCSCError,
 } from './errors';
 
 // Import and re-export control codes
