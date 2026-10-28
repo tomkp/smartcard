@@ -208,14 +208,15 @@ void ControlWorker::OnError(const Napi::Error& error) {
 ConnectWorker::ConnectWorker(
     Napi::Env env,
     Napi::Object owner,
-    SCARDCONTEXT context,
+    ContextHandlePtr context,
     std::string readerName,
     DWORD shareMode,
     DWORD preferredProtocols,
     Napi::Promise::Deferred deferred)
     : Napi::AsyncWorker(env),
       ownerRef_(Napi::Persistent(owner)),
-      context_(context),
+      contextHandle_(std::move(context)),
+      context_(contextHandle_->Get()),
       readerName_(std::move(readerName)),
       shareMode_(shareMode),
       preferredProtocols_(preferredProtocols),
@@ -240,7 +241,8 @@ void ConnectWorker::OnOK() {
     Napi::Env env = Env();
 
     if (result_ == SCARD_S_SUCCESS) {
-        Napi::Object card = PCSCCard::NewInstance(env, card_, activeProtocol_, readerName_);
+        Napi::Object card = PCSCCard::NewInstance(
+            env, contextHandle_, card_, activeProtocol_, readerName_);
         deferred_.Resolve(card);
     } else {
         deferred_.Reject(NewPCSCError(env, result_).Value());

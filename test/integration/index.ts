@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import {
     Context,
     Devices,
@@ -190,6 +192,69 @@ describe('Card operations (hardware dependent)', () => {
         } finally {
             ctx.close();
         }
+    });
+});
+
+describe('Handle lifetimes (hardware dependent)', () => {
+    // Expose gc() without requiring --expose-gc on the command line
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+
+    async function collectGarbage(): Promise<void> {
+        gc();
+        // napi finalizers can be deferred to a later tick
+        await new Promise((resolve) => setImmediate(resolve));
+        gc();
+    }
+
+    it('card should stay usable after its Context is garbage-collected', async (t) => {
+        if (!hasCardPresent()) {
+            t.skip('No card present');
+            return;
+        }
+        // Keep only the card: its Context and Reader become unreachable
+        const card = await (async () => {
+            const ctx = new Context();
+            const reader = ctx
+                .listReaders()
+                .find((r: ReaderType) => (r.state & SCARD_STATE_PRESENT) !== 0);
+            return reader!.connect(
+                SCARD_SHARE_SHARED,
+                SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1
+            );
+        })();
+
+        await collectGarbage();
+
+        try {
+            assert(card.connected, 'Card should still be connected');
+            // Fails with 'Invalid handle' if the context was released
+            const status = card.getStatus();
+            assert(Buffer.isBuffer(status.atr), 'Status ATR should be a buffer');
+        } finally {
+            card.disconnect(SCARD_LEAVE_CARD);
+        }
+    });
+
+    it('card and reader should refuse to use a closed context', async (t) => {
+        if (!hasCardPresent()) {
+            t.skip('No card present');
+            return;
+        }
+        const ctx = new Context();
+        const reader = ctx
+            .listReaders()
+            .find((r: ReaderType) => (r.state & SCARD_STATE_PRESENT) !== 0)!;
+        const card = await reader.connect(
+            SCARD_SHARE_SHARED,
+            SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1
+        );
+
+        ctx.close();
+
+        assert.strictEqual(card.connected, false, 'Card handle dies with its context');
+        assert.throws(() => card.getStatus(), /Card is not connected/);
+        assert.throws(() => reader.connect(), /Context is not valid/);
     });
 });
 

@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include "platform/pcsc.h"
+#include "pcsc_context_handle.h"
 
 // Every worker holds a Napi::ObjectReference to the JS object that owns its
 // PC/SC handle (Card, Reader, or Context). Without it, GC can finalize the
@@ -93,7 +94,7 @@ class ConnectWorker : public Napi::AsyncWorker {
 public:
     ConnectWorker(Napi::Env env,
                   Napi::Object owner,
-                  SCARDCONTEXT context,
+                  ContextHandlePtr context,
                   std::string readerName,
                   DWORD shareMode,
                   DWORD preferredProtocols,
@@ -105,6 +106,9 @@ public:
 
 private:
     Napi::ObjectReference ownerRef_;
+    // Handed to the new Card, which needs the context alive as long as it is
+    ContextHandlePtr contextHandle_;
+    // Copied on the main thread; Execute() never touches contextHandle_
     SCARDCONTEXT context_;
     std::string readerName_;
     DWORD shareMode_;

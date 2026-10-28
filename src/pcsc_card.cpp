@@ -25,10 +25,12 @@ Napi::Object PCSCCard::Init(Napi::Env env, Napi::Object exports) {
     return exports;
 }
 
-Napi::Object PCSCCard::NewInstance(Napi::Env env, SCARDHANDLE card,
-                                    DWORD protocol, const std::string& readerName) {
+Napi::Object PCSCCard::NewInstance(Napi::Env env, ContextHandlePtr context,
+                                    SCARDHANDLE card, DWORD protocol,
+                                    const std::string& readerName) {
     Napi::Object obj = constructor.New({});
     PCSCCard* cardObj = Napi::ObjectWrap<PCSCCard>::Unwrap(obj);
+    cardObj->context_ = std::move(context);
     cardObj->card_ = card;
     cardObj->protocol_ = protocol;
     cardObj->readerName_ = readerName;
@@ -45,7 +47,7 @@ PCSCCard::PCSCCard(const Napi::CallbackInfo& info)
 }
 
 PCSCCard::~PCSCCard() {
-    if (connected_ && card_ != 0) {
+    if (IsConnected() && card_ != 0) {
         SCardDisconnect(card_, SCARD_LEAVE_CARD);
         connected_ = false;
         card_ = 0;
@@ -57,13 +59,13 @@ Napi::Value PCSCCard::GetProtocolValue(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value PCSCCard::GetConnectedValue(const Napi::CallbackInfo& info) {
-    return Napi::Boolean::New(info.Env(), connected_);
+    return Napi::Boolean::New(info.Env(), IsConnected());
 }
 
 Napi::Value PCSCCard::GetAtr(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
+    if (!IsConnected()) {
         return env.Null();
     }
 
@@ -86,7 +88,7 @@ Napi::Value PCSCCard::GetAtr(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::Transmit(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
+    if (!IsConnected()) {
         Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
@@ -135,7 +137,7 @@ Napi::Value PCSCCard::Transmit(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::Control(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
+    if (!IsConnected()) {
         Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
@@ -174,7 +176,7 @@ Napi::Value PCSCCard::Control(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::GetStatus(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
+    if (!IsConnected()) {
         Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
@@ -204,7 +206,7 @@ Napi::Value PCSCCard::GetStatus(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::Disconnect(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
+    if (!IsConnected()) {
         return env.Undefined();
     }
 
@@ -227,7 +229,7 @@ Napi::Value PCSCCard::Disconnect(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::Reconnect(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
+    if (!IsConnected()) {
         Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
