@@ -109,6 +109,26 @@ export function getPCSCErrorCode(err: unknown): number | undefined {
 }
 
 /**
+ * Check if an error indicates an unresponsive card (SCARD_W_UNRESPONSIVE_CARD).
+ * Used for the protocol fallbacks in Devices (connect) and CardWrapper
+ * (reconnect).
+ */
+export function isUnresponsiveCardError(err: Error): boolean {
+    if (!err) {
+        return false;
+    }
+    const code = getPCSCErrorCode(err);
+    if (code !== undefined) {
+        return code === SCARD_W_UNRESPONSIVE_CARD;
+    }
+    // No PC/SC code (test doubles, foreign errors): fall back to the message
+    if (typeof err.message !== 'string') {
+        return false;
+    }
+    return err.message.toLowerCase().includes('unresponsive');
+}
+
+/**
  * Normalize an error into the typed hierarchy.
  *
  * The native layer already throws typed errors; this upgrades any other

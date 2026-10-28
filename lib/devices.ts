@@ -13,9 +13,8 @@ import type {
 } from './types';
 import { wrapCard } from './card-wrapper';
 import {
-    SCARD_W_UNRESPONSIVE_CARD,
     createPCSCError,
-    getPCSCErrorCode,
+    isUnresponsiveCardError,
     toPCSCError,
 } from './errors';
 
@@ -24,25 +23,6 @@ const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
 interface ReaderStateInternal {
     hasCard: boolean;
     card: Card | null;
-}
-
-/**
- * Check if an error indicates an unresponsive card (SCARD_W_UNRESPONSIVE_CARD).
- * Used to determine if we should fallback to T=0 protocol.
- */
-export function isUnresponsiveCardError(err: Error): boolean {
-    if (!err) {
-        return false;
-    }
-    const code = getPCSCErrorCode(err);
-    if (code !== undefined) {
-        return code === SCARD_W_UNRESPONSIVE_CARD;
-    }
-    // No PC/SC code (test doubles, foreign errors): fall back to the message
-    if (typeof err.message !== 'string') {
-        return false;
-    }
-    return err.message.toLowerCase().includes('unresponsive');
 }
 
 /**

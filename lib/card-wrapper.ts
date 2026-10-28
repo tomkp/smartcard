@@ -7,8 +7,7 @@
 
 import type { Card, CardStatus, TransmitOptions } from './types';
 import { transmitWithAutoResponse } from './t0-handler';
-// Only called at reconnect time, so the import cycle with devices is harmless
-import { isUnresponsiveCardError } from './devices';
+import { isUnresponsiveCardError } from './errors';
 
 /**
  * What the native layer offers when reconnect() is given no protocol.
