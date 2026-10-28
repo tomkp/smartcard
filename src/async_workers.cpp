@@ -1,6 +1,7 @@
 #include "async_workers.h"
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
+#include "pcsc_napi_error.h"
 #include <cstring>
 
 // ============================================================================
@@ -9,12 +10,14 @@
 
 WaitForChangeWorker::WaitForChangeWorker(
     Napi::Env env,
+    Napi::Object owner,
     SCARDCONTEXT context,
     std::vector<std::string> readerNames,
     std::vector<DWORD> currentStates,
     DWORD timeout,
     Napi::Promise::Deferred deferred)
     : Napi::AsyncWorker(env),
+      ownerRef_(Napi::Persistent(owner)),
       context_(context),
       readerNames_(std::move(readerNames)),
       timeout_(timeout),
@@ -67,7 +70,7 @@ void WaitForChangeWorker::OnOK() {
         // Timeout - resolve with empty array
         deferred_.Resolve(Napi::Array::New(env, 0));
     } else {
-        deferred_.Reject(Napi::Error::New(env, GetPCSCErrorString(result_)).Value());
+        deferred_.Reject(NewPCSCError(env, result_).Value());
     }
 }
 
@@ -81,12 +84,14 @@ void WaitForChangeWorker::OnError(const Napi::Error& error) {
 
 TransmitWorker::TransmitWorker(
     Napi::Env env,
+    Napi::Object owner,
     SCARDHANDLE card,
     DWORD protocol,
     std::vector<uint8_t> sendBuffer,
     size_t maxRecvLength,
     Napi::Promise::Deferred deferred)
     : Napi::AsyncWorker(env),
+      ownerRef_(Napi::Persistent(owner)),
       card_(card),
       protocol_(protocol),
       sendBuffer_(std::move(sendBuffer)),
@@ -137,7 +142,7 @@ void TransmitWorker::OnOK() {
             env, recvBuffer_.data(), recvLength_);
         deferred_.Resolve(buffer);
     } else {
-        deferred_.Reject(Napi::Error::New(env, GetPCSCErrorString(result_)).Value());
+        deferred_.Reject(NewPCSCError(env, result_).Value());
     }
 }
 
@@ -151,11 +156,13 @@ void TransmitWorker::OnError(const Napi::Error& error) {
 
 ControlWorker::ControlWorker(
     Napi::Env env,
+    Napi::Object owner,
     SCARDHANDLE card,
     DWORD controlCode,
     std::vector<uint8_t> sendBuffer,
     Napi::Promise::Deferred deferred)
     : Napi::AsyncWorker(env),
+      ownerRef_(Napi::Persistent(owner)),
       card_(card),
       controlCode_(controlCode),
       sendBuffer_(std::move(sendBuffer)),
@@ -186,7 +193,7 @@ void ControlWorker::OnOK() {
             env, recvBuffer_.data(), bytesReturned_);
         deferred_.Resolve(buffer);
     } else {
-        deferred_.Reject(Napi::Error::New(env, GetPCSCErrorString(result_)).Value());
+        deferred_.Reject(NewPCSCError(env, result_).Value());
     }
 }
 
@@ -200,13 +207,16 @@ void ControlWorker::OnError(const Napi::Error& error) {
 
 ConnectWorker::ConnectWorker(
     Napi::Env env,
-    SCARDCONTEXT context,
+    Napi::Object owner,
+    ContextHandlePtr context,
     std::string readerName,
     DWORD shareMode,
     DWORD preferredProtocols,
     Napi::Promise::Deferred deferred)
     : Napi::AsyncWorker(env),
-      context_(context),
+      ownerRef_(Napi::Persistent(owner)),
+      contextHandle_(std::move(context)),
+      context_(contextHandle_->Get()),
       readerName_(std::move(readerName)),
       shareMode_(shareMode),
       preferredProtocols_(preferredProtocols),
@@ -231,10 +241,11 @@ void ConnectWorker::OnOK() {
     Napi::Env env = Env();
 
     if (result_ == SCARD_S_SUCCESS) {
-        Napi::Object card = PCSCCard::NewInstance(env, card_, activeProtocol_, readerName_);
+        Napi::Object card = PCSCCard::NewInstance(
+            env, contextHandle_, card_, activeProtocol_, readerName_);
         deferred_.Resolve(card);
     } else {
-        deferred_.Reject(Napi::Error::New(env, GetPCSCErrorString(result_)).Value());
+        deferred_.Reject(NewPCSCError(env, result_).Value());
     }
 }
 
@@ -248,6 +259,7 @@ void ConnectWorker::OnError(const Napi::Error& error) {
 
 ReconnectWorker::ReconnectWorker(
     Napi::Env env,
+    Napi::Object owner,
     SCARDHANDLE card,
     DWORD shareMode,
     DWORD preferredProtocols,
@@ -255,6 +267,7 @@ ReconnectWorker::ReconnectWorker(
     DWORD* protocolOut,
     Napi::Promise::Deferred deferred)
     : Napi::AsyncWorker(env),
+      ownerRef_(Napi::Persistent(owner)),
       card_(card),
       shareMode_(shareMode),
       preferredProtocols_(preferredProtocols),
@@ -285,7 +298,7 @@ void ReconnectWorker::OnOK() {
         }
         deferred_.Resolve(Napi::Number::New(env, activeProtocol_));
     } else {
-        deferred_.Reject(Napi::Error::New(env, GetPCSCErrorString(result_)).Value());
+        deferred_.Reject(NewPCSCError(env, result_).Value());
     }
 }
 

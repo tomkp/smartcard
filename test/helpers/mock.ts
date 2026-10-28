@@ -287,10 +287,15 @@ export class MockReaderMonitor implements ReaderMonitor {
         type: MonitorEvent['type'],
         readerName: string,
         state: number,
-        atr: Buffer | null
+        atr: Buffer | null,
+        code?: number
     ): void {
         if (this._callback) {
-            this._callback({ type, reader: readerName, state, atr });
+            const event: MonitorEvent = { type, reader: readerName, state, atr };
+            if (code !== undefined) {
+                event.code = code;
+            }
+            this._callback(event);
         }
     }
 
@@ -338,9 +343,9 @@ export class MockReaderMonitor implements ReaderMonitor {
         }
     }
 
-    emitError(message: string): void {
+    emitError(message: string, code?: number): void {
         if (this._running) {
-            this._emitEvent('error', message, 0, null);
+            this._emitEvent('error', message, 0, null, code);
         }
     }
 }
@@ -444,9 +449,14 @@ export class UnresponsiveDualProtocolReader extends MockReader {
         if (!this._card) {
             throw new Error('No card in reader');
         }
-        // If trying to connect with both protocols, fail with unresponsive
+        // If trying to connect with both protocols, fail with unresponsive.
+        // Carry the numeric code like the native layer does (SCARD_W_UNRESPONSIVE_CARD)
         if (protocol === (SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1)) {
-            throw new Error('Card is unresponsive');
+            const err = new Error('Card is unresponsive') as Error & {
+                code: number;
+            };
+            err.code = 0x80100066;
+            throw err;
         }
         // T0 only should succeed
         return this._card;

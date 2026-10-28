@@ -3,7 +3,23 @@
 #include "pcsc_reader.h"
 #include "pcsc_card.h"
 #include "reader_monitor.h"
+#include "pcsc_napi_error.h"
 #include "platform/pcsc.h"
+
+// setErrorFactory(fn): fn(message, code) builds the Error that native
+// PC/SC failures throw or reject with
+static Napi::Value SetErrorFactory(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        Napi::TypeError::New(env, "Expected error factory function").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    env.GetInstanceData<AddonData>()->errorFactory =
+        Napi::Persistent(info[0].As<Napi::Function>());
+    return env.Undefined();
+}
 
 // Export PC/SC constants
 void ExportConstants(Napi::Env env, Napi::Object exports) {
@@ -39,6 +55,10 @@ void ExportConstants(Napi::Env env, Napi::Object exports) {
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+    // Freed by node-addon-api's default finalizer when the env shuts down
+    env.SetInstanceData(new AddonData());
+    exports.Set("setErrorFactory", Napi::Function::New(env, SetErrorFactory, "setErrorFactory"));
+
     // Initialize wrapper classes
     PCSCContext::Init(env, exports);
     PCSCReader::Init(env, exports);

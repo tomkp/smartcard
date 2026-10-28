@@ -1,6 +1,7 @@
 #include "pcsc_context.h"
 #include "pcsc_reader.h"
 #include "pcsc_errors.h"
+#include "pcsc_napi_error.h"
 #include "async_workers.h"
 #include <cstring>
 
@@ -27,40 +28,35 @@ Napi::Object PCSCContext::NewInstance(Napi::Env env) {
 }
 
 PCSCContext::PCSCContext(const Napi::CallbackInfo& info)
-    : Napi::ObjectWrap<PCSCContext>(info), context_(0), valid_(false) {
+    : Napi::ObjectWrap<PCSCContext>(info) {
 
     Napi::Env env = info.Env();
 
     // Establish PC/SC context
-    LONG result = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context_);
+    SCARDCONTEXT context = 0;
+    LONG result = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context);
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
         return;
     }
 
-    valid_ = true;
-}
-
-PCSCContext::~PCSCContext() {
-    if (valid_ && context_ != 0) {
-        SCardReleaseContext(context_);
-        valid_ = false;
-        context_ = 0;
-    }
+    handle_ = std::make_shared<ContextHandle>(context);
 }
 
 Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!valid_) {
-        Napi::Error::New(env, "Context is not valid").ThrowAsJavaScriptException();
+    if (!IsValid()) {
+        NewInvalidHandleError(env, "Context is not valid").ThrowAsJavaScriptException();
         return env.Null();
     }
 
+    SCARDCONTEXT context = handle_->Get();
+
     // First call to get buffer size
     DWORD readersLen = 0;
-    LONG result = SCardListReaders(context_, nullptr, nullptr, &readersLen);
+    LONG result = SCardListReaders(context, nullptr, nullptr, &readersLen);
 
     if (result == static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE)) {
         // No readers - return empty array
@@ -68,16 +64,16 @@ Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
     }
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
         return env.Null();
     }
 
     // Allocate buffer and get reader names
     std::vector<char> readersBuffer(readersLen);
-    result = SCardListReaders(context_, nullptr, readersBuffer.data(), &readersLen);
+    result = SCardListReaders(context, nullptr, readersBuffer.data(), &readersLen);
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -97,7 +93,7 @@ Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
     }
 
     // Get current state (non-blocking with 0 timeout)
-    result = SCardGetStatusChange(context_, 0, states.data(), states.size());
+    result = SCardGetStatusChange(context, 0, states.data(), states.size());
 
     // Create Reader objects
     Napi::Array readers = Napi::Array::New(env, readerNames.size());
@@ -108,7 +104,7 @@ Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
         }
         DWORD state = (result == SCARD_S_SUCCESS) ? states[i].dwEventState : 0;
 
-        Napi::Object reader = PCSCReader::NewInstance(env, context_, readerNames[i], state, atr);
+        Napi::Object reader = PCSCReader::NewInstance(env, handle_, readerNames[i], state, atr);
         readers.Set(static_cast<uint32_t>(i), reader);
     }
 
@@ -118,10 +114,12 @@ Napi::Value PCSCContext::ListReaders(const Napi::CallbackInfo& info) {
 Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!valid_) {
-        Napi::Error::New(env, "Context is not valid").ThrowAsJavaScriptException();
+    if (!IsValid()) {
+        NewInvalidHandleError(env, "Context is not valid").ThrowAsJavaScriptException();
         return env.Null();
     }
+
+    SCARDCONTEXT context = handle_->Get();
 
     // Parse arguments: readers array (optional), timeout (optional)
     std::vector<std::string> readerNames;
@@ -162,7 +160,7 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
     // If no readers specified, get all readers
     if (readerNames.empty()) {
         DWORD readersLen = 0;
-        LONG result = SCardListReaders(context_, nullptr, nullptr, &readersLen);
+        LONG result = SCardListReaders(context, nullptr, nullptr, &readersLen);
 
         if (result == static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE)) {
             // Add PnP notification to detect when readers are attached
@@ -170,7 +168,7 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
             currentStates.push_back(SCARD_STATE_UNAWARE);
         } else if (result == SCARD_S_SUCCESS) {
             std::vector<char> readersBuffer(readersLen);
-            result = SCardListReaders(context_, nullptr, readersBuffer.data(), &readersLen);
+            result = SCardListReaders(context, nullptr, readersBuffer.data(), &readersLen);
             if (result == SCARD_S_SUCCESS) {
                 const char* p = readersBuffer.data();
                 while (*p != '\0') {
@@ -186,7 +184,8 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     WaitForChangeWorker* worker = new WaitForChangeWorker(
-        env, context_, readerNames, currentStates, timeout, deferred);
+        env, info.This().As<Napi::Object>(), context, readerNames, currentStates,
+        timeout, deferred);
     worker->Queue();
 
     return deferred.Promise();
@@ -195,13 +194,13 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
 Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!valid_) {
+    if (!IsValid()) {
         return env.Undefined();
     }
 
-    LONG result = SCardCancel(context_);
+    LONG result = SCardCancel(handle_->Get());
     if (result != SCARD_S_SUCCESS && result != static_cast<LONG>(SCARD_E_INVALID_HANDLE)) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
     }
 
     return env.Undefined();
@@ -210,15 +209,15 @@ Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
 Napi::Value PCSCContext::Close(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (valid_ && context_ != 0) {
-        SCardReleaseContext(context_);
-        valid_ = false;
-        context_ = 0;
+    // Release now, even if readers or cards still hold the handle: they
+    // see it as invalid from here on and stop using it
+    if (handle_) {
+        handle_->Release();
     }
 
     return env.Undefined();
 }
 
 Napi::Value PCSCContext::GetIsValid(const Napi::CallbackInfo& info) {
-    return Napi::Boolean::New(info.Env(), valid_);
+    return Napi::Boolean::New(info.Env(), IsValid());
 }

@@ -1,6 +1,7 @@
 #include "pcsc_reader.h"
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
+#include "pcsc_napi_error.h"
 #include "async_workers.h"
 
 Napi::FunctionReference PCSCReader::constructor;
@@ -20,12 +21,12 @@ Napi::Object PCSCReader::Init(Napi::Env env, Napi::Object exports) {
     return exports;
 }
 
-Napi::Object PCSCReader::NewInstance(Napi::Env env, SCARDCONTEXT context,
+Napi::Object PCSCReader::NewInstance(Napi::Env env, ContextHandlePtr context,
                                       const std::string& name, DWORD state,
                                       const std::vector<uint8_t>& atr) {
     Napi::Object obj = constructor.New({});
     PCSCReader* reader = Napi::ObjectWrap<PCSCReader>::Unwrap(obj);
-    reader->context_ = context;
+    reader->context_ = std::move(context);
     reader->name_ = name;
     reader->state_ = state;
     reader->atr_ = atr;
@@ -34,7 +35,6 @@ Napi::Object PCSCReader::NewInstance(Napi::Env env, SCARDCONTEXT context,
 
 PCSCReader::PCSCReader(const Napi::CallbackInfo& info)
     : Napi::ObjectWrap<PCSCReader>(info),
-      context_(0),
       state_(SCARD_STATE_UNAWARE) {
     // Properties set via NewInstance
 }
@@ -66,6 +66,13 @@ Napi::Value PCSCReader::GetAtrValue(const Napi::CallbackInfo& info) {
 Napi::Value PCSCReader::Connect(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
+    // The context may have been closed since listReaders(); connecting on
+    // its released handle would reach whatever PC/SC reassigned it to
+    if (!context_ || !context_->IsValid()) {
+        NewInvalidHandleError(env, "Context is not valid").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
     // Parse arguments: shareMode (optional), preferredProtocols (optional)
     DWORD shareMode = SCARD_SHARE_SHARED;
     DWORD preferredProtocols = SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1;
@@ -82,7 +89,8 @@ Napi::Value PCSCReader::Connect(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     ConnectWorker* worker = new ConnectWorker(
-        env, context_, name_, shareMode, preferredProtocols, deferred);
+        env, info.This().As<Napi::Object>(), context_, name_, shareMode,
+        preferredProtocols, deferred);
     worker->Queue();
 
     return deferred.Promise();

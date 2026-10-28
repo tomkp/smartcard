@@ -1,5 +1,6 @@
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
+#include "pcsc_napi_error.h"
 #include "async_workers.h"
 #include <cstring>
 
@@ -24,10 +25,12 @@ Napi::Object PCSCCard::Init(Napi::Env env, Napi::Object exports) {
     return exports;
 }
 
-Napi::Object PCSCCard::NewInstance(Napi::Env env, SCARDHANDLE card,
-                                    DWORD protocol, const std::string& readerName) {
+Napi::Object PCSCCard::NewInstance(Napi::Env env, ContextHandlePtr context,
+                                    SCARDHANDLE card, DWORD protocol,
+                                    const std::string& readerName) {
     Napi::Object obj = constructor.New({});
     PCSCCard* cardObj = Napi::ObjectWrap<PCSCCard>::Unwrap(obj);
+    cardObj->context_ = std::move(context);
     cardObj->card_ = card;
     cardObj->protocol_ = protocol;
     cardObj->readerName_ = readerName;
@@ -44,7 +47,7 @@ PCSCCard::PCSCCard(const Napi::CallbackInfo& info)
 }
 
 PCSCCard::~PCSCCard() {
-    if (connected_ && card_ != 0) {
+    if (IsConnected() && card_ != 0) {
         SCardDisconnect(card_, SCARD_LEAVE_CARD);
         connected_ = false;
         card_ = 0;
@@ -56,13 +59,13 @@ Napi::Value PCSCCard::GetProtocolValue(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value PCSCCard::GetConnectedValue(const Napi::CallbackInfo& info) {
-    return Napi::Boolean::New(info.Env(), connected_);
+    return Napi::Boolean::New(info.Env(), IsConnected());
 }
 
 Napi::Value PCSCCard::GetAtr(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
+    if (!IsConnected()) {
         return env.Null();
     }
 
@@ -85,8 +88,8 @@ Napi::Value PCSCCard::GetAtr(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::Transmit(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
-        Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
+    if (!IsConnected()) {
+        NewInvalidHandleError(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -124,7 +127,8 @@ Napi::Value PCSCCard::Transmit(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     TransmitWorker* worker = new TransmitWorker(
-        env, card_, protocol_, sendBuffer, maxRecvLength, deferred);
+        env, info.This().As<Napi::Object>(), card_, protocol_, sendBuffer,
+        maxRecvLength, deferred);
     worker->Queue();
 
     return deferred.Promise();
@@ -133,8 +137,8 @@ Napi::Value PCSCCard::Transmit(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::Control(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
-        Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
+    if (!IsConnected()) {
+        NewInvalidHandleError(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -163,7 +167,7 @@ Napi::Value PCSCCard::Control(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     ControlWorker* worker = new ControlWorker(
-        env, card_, controlCode, sendBuffer, deferred);
+        env, info.This().As<Napi::Object>(), card_, controlCode, sendBuffer, deferred);
     worker->Queue();
 
     return deferred.Promise();
@@ -172,8 +176,8 @@ Napi::Value PCSCCard::Control(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::GetStatus(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
-        Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
+    if (!IsConnected()) {
+        NewInvalidHandleError(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -187,7 +191,7 @@ Napi::Value PCSCCard::GetStatus(const Napi::CallbackInfo& info) {
     LONG result = SCardStatus(card_, nullptr, &readerLen, &state, &protocol, atr, &atrLen);
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -202,7 +206,7 @@ Napi::Value PCSCCard::GetStatus(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::Disconnect(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
+    if (!IsConnected()) {
         return env.Undefined();
     }
 
@@ -216,7 +220,7 @@ Napi::Value PCSCCard::Disconnect(const Napi::CallbackInfo& info) {
     card_ = 0;
 
     if (result != SCARD_S_SUCCESS) {
-        Napi::Error::New(env, GetPCSCErrorString(result)).ThrowAsJavaScriptException();
+        NewPCSCError(env, result).ThrowAsJavaScriptException();
     }
 
     return env.Undefined();
@@ -225,8 +229,8 @@ Napi::Value PCSCCard::Disconnect(const Napi::CallbackInfo& info) {
 Napi::Value PCSCCard::Reconnect(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (!connected_) {
-        Napi::Error::New(env, "Card is not connected").ThrowAsJavaScriptException();
+    if (!IsConnected()) {
+        NewInvalidHandleError(env, "Card is not connected").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -248,7 +252,8 @@ Napi::Value PCSCCard::Reconnect(const Napi::CallbackInfo& info) {
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
     ReconnectWorker* worker = new ReconnectWorker(
-        env, card_, shareMode, preferredProtocols, initialization, &protocol_, deferred);
+        env, info.This().As<Napi::Object>(), card_, shareMode, preferredProtocols,
+        initialization, &protocol_, deferred);
     worker->Queue();
 
     return deferred.Promise();

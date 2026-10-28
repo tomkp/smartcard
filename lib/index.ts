@@ -5,6 +5,7 @@ import type {
     Reader as ReaderInterface,
     ReaderMonitorConstructor,
 } from './types';
+import { createPCSCError } from './errors';
 
 // Load native addon
 let addon: NativeAddon;
@@ -19,6 +20,9 @@ try {
         `Original error: ${err instanceof Error ? err.message : String(err)}`
     );
 }
+
+// Native PC/SC failures throw (or reject with) the typed PCSCError classes
+addon.setErrorFactory(createPCSCError);
 
 // Re-export native classes
 export const Context = addon.Context as ContextConstructor;
@@ -75,6 +79,7 @@ export {
     ServiceNotRunningError,
     SharingViolationError,
     createPCSCError,
+    toPCSCError,
 } from './errors';
 
 // Import and re-export control codes

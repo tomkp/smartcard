@@ -454,6 +454,8 @@ try {
 }
 ```
 
+PC/SC failures from the low-level `Context`, `Reader` and `Card` and from `Devices` `'error'` events are all `PCSCError`s, or one of the subclasses above (also `NoReadersError`, `ServiceNotRunningError` and `SharingViolationError`), with the PC/SC code in `err.code`. Once a `Context` is closed, its readers and cards throw a `PCSCError` with code `0x80100003` (`SCARD_E_INVALID_HANDLE`).
+
 ## Troubleshooting
 
 ### "No readers available"
