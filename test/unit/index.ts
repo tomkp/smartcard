@@ -567,7 +567,7 @@ describe('MockDevices Integration', () => {
 });
 
 describe('isUnresponsiveCardError', () => {
-    const { isUnresponsiveCardError } = require('../../lib/devices');
+    const { isUnresponsiveCardError } = require('../../lib/errors');
 
     it('should return true for unresponsive error message', () => {
         const err = new Error('Card is unresponsive');
@@ -2407,7 +2407,7 @@ describe('Native error code mapping', () => {
         CardRemovedError,
         ServiceNotRunningError,
     } = require('../../lib/errors');
-    const { isUnresponsiveCardError } = require('../../lib/devices');
+    const { isUnresponsiveCardError } = require('../../lib/errors');
 
     function codedError(message: string, code: number): Error {
         const err = new Error(message) as Error & { code: number };
