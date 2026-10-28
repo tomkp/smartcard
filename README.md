@@ -309,7 +309,7 @@ await card.reconnect(SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1, 
 await card.reconnect(SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1, SCARD_UNPOWER_CARD);
 ```
 
-Some readers report a T=0-only card as unresponsive when offered T=0 or T=1. If that happens, a card from `Devices` retries the reconnect with the protocol it is already using, the same fallback `Devices` applies when it first connects.
+Some reader and card combinations (an SCR35xx with a T=0-only card, for one) report the card unresponsive when a reset offers T=1 as well as T=0. When that happens, cards from `Devices` (or `wrapCard()`) retry the reconnect once with the protocol the card is already using, if you offered it. `Devices` works around the same quirk when it first connects.
 
 `disconnect(disposition)` accepts the same constants to reset or unpower the card on the way out.
 
