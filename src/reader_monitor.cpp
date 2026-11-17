@@ -10,8 +10,6 @@
 using smartcard::CardEvent;
 using smartcard::DetectCardStateChange;
 
-Napi::FunctionReference ReaderMonitor::constructor;
-
 // Format a PC/SC error as "message (0xXXXXXXXX)" so the numeric code
 // survives to JS even when only the message string is consumed.
 static std::string FormatPCSCError(LONG code) {
@@ -38,9 +36,6 @@ Napi::Object ReaderMonitor::Init(Napi::Env env, Napi::Object exports) {
         InstanceMethod("stop", &ReaderMonitor::Stop),
         InstanceAccessor("isRunning", &ReaderMonitor::GetIsRunning, nullptr),
     });
-
-    constructor = Napi::Persistent(func);
-    constructor.SuppressDestruct();
 
     exports.Set("ReaderMonitor", func);
     return exports;

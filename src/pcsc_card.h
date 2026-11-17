@@ -25,8 +25,6 @@ public:
     bool IsConnected() const { return connected_ && context_ && context_->IsValid(); }
 
 private:
-    static Napi::FunctionReference constructor;
-
     // Keeps the context alive for as long as this card; destroyed after
     // ~PCSCCard's body, so the card disconnects before the context goes
     ContextHandlePtr context_;

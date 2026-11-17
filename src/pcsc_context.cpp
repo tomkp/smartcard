@@ -5,8 +5,6 @@
 #include "async_workers.h"
 #include <cstring>
 
-Napi::FunctionReference PCSCContext::constructor;
-
 Napi::Object PCSCContext::Init(Napi::Env env, Napi::Object exports) {
     Napi::Function func = DefineClass(env, "Context", {
         InstanceMethod("listReaders", &PCSCContext::ListReaders),
@@ -16,15 +14,8 @@ Napi::Object PCSCContext::Init(Napi::Env env, Napi::Object exports) {
         InstanceAccessor("isValid", &PCSCContext::GetIsValid, nullptr),
     });
 
-    constructor = Napi::Persistent(func);
-    constructor.SuppressDestruct();
-
     exports.Set("Context", func);
     return exports;
-}
-
-Napi::Object PCSCContext::NewInstance(Napi::Env env) {
-    return constructor.New({});
 }
 
 PCSCContext::PCSCContext(const Napi::CallbackInfo& info)

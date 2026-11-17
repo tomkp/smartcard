@@ -2792,3 +2792,50 @@ describe('Idle reader monitor', () => {
         }
     });
 });
+
+describe('Addon loaded by several environments', () => {
+    // The main thread and workers each load their own instance of the
+    // addon. Its JS references used to live in statics shared by all of
+    // them: each load overwrote the last one's (on Node 20 that alone
+    // segfaults once a worker has exited), and after a worker exited the
+    // main thread's listReaders() built Readers through a constructor from
+    // that dead environment. Runs in a child process: both killed it.
+    it('keeps working in the main thread after workers that loaded it exit', () => {
+        const mainSource = `
+            const { Worker } = require('node:worker_threads');
+            const addonPath = ${JSON.stringify(addonPath)};
+            const addon = require(addonPath);
+            function useAddon() {
+                let context;
+                try {
+                    context = new addon.Context();
+                } catch (err) {
+                    // No PC/SC service: loading is still exercised
+                    if (${JSON.stringify(NO_SERVICE_CODES)}.includes(err.code)) return;
+                    throw err;
+                }
+                context.listReaders();
+                context.close();
+            }
+            useAddon();
+            let started = 0;
+            (function next() {
+                if (started++ === 3) {
+                    useAddon();
+                    console.log('done');
+                    return;
+                }
+                const source = 'require(' + JSON.stringify(addonPath) + ')';
+                new Worker(source, { eval: true }).on('exit', () => setTimeout(next, 20));
+            })();
+        `;
+        const result = spawnSync(process.execPath, ['-e', mainSource], {
+            encoding: 'utf-8',
+            timeout: 30000,
+        });
+        const output = `${result.stdout}\n${result.stderr}`;
+        assert.strictEqual(result.signal, null, output);
+        assert.strictEqual(result.status, 0, output);
+        assert.match(result.stdout, /done/, output);
+    });
+});

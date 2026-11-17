@@ -9,7 +9,6 @@
 class PCSCContext : public Napi::ObjectWrap<PCSCContext> {
 public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
-    static Napi::Object NewInstance(Napi::Env env);
 
     PCSCContext(const Napi::CallbackInfo& info);
 
@@ -18,8 +17,6 @@ public:
     bool IsValid() const { return handle_ && handle_->IsValid(); }
 
 private:
-    static Napi::FunctionReference constructor;
-
     // Shared with the Readers (and their Cards) created from this context;
     // released when the last of them is finalized, or by close()
     ContextHandlePtr handle_;
