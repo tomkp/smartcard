@@ -3,14 +3,7 @@
 #include <napi.h>
 #include <string>
 #include "pcsc_errors.h"
-
-// Per-instance addon state (each worker_thread loads its own instance)
-struct AddonData {
-    // (message, code) => Error, registered by lib/index.ts via
-    // setErrorFactory() so native failures arrive as the typed PCSCError
-    // classes from lib/errors.ts
-    Napi::FunctionReference errorFactory;
-};
+#include "addon_data.h"
 
 // Build a JS Error for a PC/SC failure. The code is exposed unsigned
 // (e.g. 0x80100069) to match the constants in lib/errors.ts; message

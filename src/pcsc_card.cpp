@@ -1,10 +1,9 @@
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
 #include "pcsc_napi_error.h"
+#include "addon_data.h"
 #include "async_workers.h"
 #include <cstring>
-
-Napi::FunctionReference PCSCCard::constructor;
 
 Napi::Object PCSCCard::Init(Napi::Env env, Napi::Object exports) {
     Napi::Function func = DefineClass(env, "Card", {
@@ -18,8 +17,7 @@ Napi::Object PCSCCard::Init(Napi::Env env, Napi::Object exports) {
         InstanceMethod("reconnect", &PCSCCard::Reconnect),
     });
 
-    constructor = Napi::Persistent(func);
-    constructor.SuppressDestruct();
+    env.GetInstanceData<AddonData>()->cardConstructor = Napi::Persistent(func);
 
     exports.Set("Card", func);
     return exports;
@@ -28,7 +26,7 @@ Napi::Object PCSCCard::Init(Napi::Env env, Napi::Object exports) {
 Napi::Object PCSCCard::NewInstance(Napi::Env env, ContextHandlePtr context,
                                     SCARDHANDLE card, DWORD protocol,
                                     const std::string& readerName) {
-    Napi::Object obj = constructor.New({});
+    Napi::Object obj = env.GetInstanceData<AddonData>()->cardConstructor.New({});
     PCSCCard* cardObj = Napi::ObjectWrap<PCSCCard>::Unwrap(obj);
     cardObj->context_ = std::move(context);
     cardObj->card_ = card;

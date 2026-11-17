@@ -25,8 +25,6 @@ public:
     void UpdateState(DWORD state, const std::vector<uint8_t>& atr);
 
 private:
-    static Napi::FunctionReference constructor;
-
     std::string name_;
     // Shared with the PCSCContext that created this reader, so the handle
     // outlives the Context object; checked before use, since close() can

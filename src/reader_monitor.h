@@ -28,8 +28,6 @@ public:
     ~ReaderMonitor();
 
 private:
-    static Napi::FunctionReference constructor;
-
     // PC/SC context
     SCARDCONTEXT context_;
     bool contextValid_;

@@ -2,9 +2,8 @@
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
 #include "pcsc_napi_error.h"
+#include "addon_data.h"
 #include "async_workers.h"
-
-Napi::FunctionReference PCSCReader::constructor;
 
 Napi::Object PCSCReader::Init(Napi::Env env, Napi::Object exports) {
     Napi::Function func = DefineClass(env, "Reader", {
@@ -14,8 +13,7 @@ Napi::Object PCSCReader::Init(Napi::Env env, Napi::Object exports) {
         InstanceMethod("connect", &PCSCReader::Connect),
     });
 
-    constructor = Napi::Persistent(func);
-    constructor.SuppressDestruct();
+    env.GetInstanceData<AddonData>()->readerConstructor = Napi::Persistent(func);
 
     exports.Set("Reader", func);
     return exports;
@@ -24,7 +22,7 @@ Napi::Object PCSCReader::Init(Napi::Env env, Napi::Object exports) {
 Napi::Object PCSCReader::NewInstance(Napi::Env env, ContextHandlePtr context,
                                       const std::string& name, DWORD state,
                                       const std::vector<uint8_t>& atr) {
-    Napi::Object obj = constructor.New({});
+    Napi::Object obj = env.GetInstanceData<AddonData>()->readerConstructor.New({});
     PCSCReader* reader = Napi::ObjectWrap<PCSCReader>::Unwrap(obj);
     reader->context_ = std::move(context);
     reader->name_ = name;

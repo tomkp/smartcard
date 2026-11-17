@@ -4,6 +4,7 @@
 #include "pcsc_card.h"
 #include "reader_monitor.h"
 #include "pcsc_napi_error.h"
+#include "addon_data.h"
 #include "platform/pcsc.h"
 
 // setErrorFactory(fn): fn(message, code) builds the Error that native
@@ -55,7 +56,9 @@ void ExportConstants(Napi::Env env, Napi::Object exports) {
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
-    // Freed by node-addon-api's default finalizer when the env shuts down
+    // Freed by node-addon-api's default finalizer when the env shuts down.
+    // Every load gets a fresh napi_env (also a second require of this file
+    // after its cache entry is cleared), so this is always the first.
     env.SetInstanceData(new AddonData());
     exports.Set("setErrorFactory", Napi::Function::New(env, SetErrorFactory, "setErrorFactory"));
 
