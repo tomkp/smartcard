@@ -368,7 +368,9 @@ MonWoken ==
                      [] OTHER              -> "error"
     /\ UNCHANGED <<monitorOnly, locked, thread, result, queue, changes, crash>>
 
-\* Changes: lock_guard(mutex_), then ApplyCardStateChange emits under it
+\* Changes: lock_guard(mutex_), then ApplyCardStateChange emits under it.
+\* (A wait failing with SCARD_E_UNKNOWN_READER takes the same steps: lock,
+\* ResyncReaderList, which emits under the lock, unlock.)
 MonProcess ==
     /\ mpc = "process"
     /\ ~locked
@@ -376,7 +378,7 @@ MonProcess ==
     /\ mpc' = "report"
     /\ UNCHANGED <<monitorOnly, thread, result, queue, changes, crash>>
 
-\* Timeout: RefreshAllReaderStates under mutex_ may find a missed change
+\* Timeout: ResyncReaderList under mutex_ may find a missed change
 MonRefresh ==
     /\ mpc = "refresh"
     /\ ~locked
@@ -394,8 +396,9 @@ MonReport ==
     /\ mpc' = "top"
     /\ UNCHANGED <<monitorOnly, thread, result, changes>>
 
-\* Errors: EmitEvent("error") outside the lock, then context recovery under
-\* mutex_, which may emit (resync events, monitor-recovered); then sleep 1 s
+\* Errors: EmitEvent("error") outside the lock, then under mutex_ either
+\* context recovery or (SCARD_E_UNKNOWN_READER) a resync, both of which may
+\* emit (resync events, monitor-recovered); then sleep 1 s
 MonError ==
     /\ mpc = "error"
     /\ Push
@@ -405,8 +408,8 @@ MonError ==
 MonRecover ==
     /\ mpc = "recover"
     /\ ~locked
-    /\ \/ locked' = TRUE /\ mpc' = "report"     \* context re-established
-       \/ UNCHANGED locked /\ mpc' = "top"      \* not fatal, or still down
+    /\ \/ locked' = TRUE /\ mpc' = "report"     \* re-established, or a resync
+       \/ UNCHANGED locked /\ mpc' = "top"      \* nothing to do, or still down
     /\ UNCHANGED <<monitorOnly, thread, result, queue, changes, crash>>
 
 MonExit ==

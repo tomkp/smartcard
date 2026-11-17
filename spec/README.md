@@ -190,18 +190,23 @@ worker-termination test under ASan would settle it.
 steps. The code now does this:
 
 1. **Swaps.** `DetectCardStateChange` (`src/reader_state_utils.h`) returns
-   `Replaced` when a card is present at both readings but pcsc-lite's event
-   counter (`dwEventState >> 16`) moved. `ApplyCardStateChange` and
-   `ResyncReaderList` then emit `card-removed` followed by `card-inserted`.
-   Native unit tests cover the detection.
+   `Replaced` when a card is present at both readings and pcsc-lite's event
+   counter (`dwEventState >> 16`) moved *forward* in between.
+   `ApplyCardStateChange` and `ResyncReaderList` then emit `card-removed`
+   followed by `card-inserted`. pcscd restarts the counter at 0 when it
+   re-creates a reader (plugged back in, or pcscd restarted) and doesn't
+   count a card already inside, so a restarted counter reads as a backward
+   jump and is never taken for a swap. Native unit tests cover the detection.
 2. **Missed attaches.** The timeout path and the periodic refresh call
    `ResyncReaderList`, which re-lists the readers, in place of
    `RefreshAllReaderStates`. A reader plugged in between waits is announced
    within about a second.
 3. **Missed detaches.** When `SCardGetStatusChange` fails with
-   `SCARD_E_UNKNOWN_READER`, the error path calls `ResyncReaderList`. The
-   monitor emits `reader-detached` and carries on. JS still gets one `error`
-   event for the failed call, as for other recoverable errors.
+   `SCARD_E_UNKNOWN_READER`, the monitor calls `ResyncReaderList` and waits
+   again at once. An unplug is routine, so there is no `error` event and no
+   sleep. If the very next wait fails the same way, it falls back to the
+   error path (one `error` a second, still re-listing), so a lasting failure
+   can't spin.
 
 What is still not covered:
 
@@ -211,13 +216,12 @@ What is still not covered:
   (`SMARTCARD_PCSC_COUNTS_CARD_EVENTS` in `src/platform/pcsc.h`). Comparing
   ATRs instead was rejected: `SCardReconnect` with a reset can change a card's
   ATR (cold vs warm), which would report a swap that never happened.
-- **A swap through a replugged reader** (`Events-replug`). pcscd restarts a
-  reader's counter when it is plugged back in. If a reader is unplugged,
-  plugged back and given a new card between two waits, the counter can land
-  on the same value and the swap is invisible. That takes three physical
-  actions inside the window, so the main property, `CardsConverge`, excuses
-  replugged readers with a ghost variable and `Events-replug` keeps the gap
-  visible.
+- **A swap through a replugged reader** (`Events-replug`). If a reader is
+  unplugged, plugged back and given a different card between two waits,
+  its restarted counter need not move forward, and the swap is invisible.
+  That takes three physical actions inside the window, so the main property,
+  `CardsConverge`, excuses a replugged reader with a ghost variable until JS
+  is next told an event about it, and `Events-replug` keeps the gap visible.
 
 With fix 2 in place the PnP entry is a latency optimisation: removing the
 PnP resync from the model still passes. On pcsc-lite 2.3.0 and later,
@@ -248,4 +252,6 @@ needs checking against Node's behaviour.
   scope hypothesis") is that bugs show up at small sizes. Every finding here
   needed 4 steps or fewer.
 - **Finer atomicity.** Each action is indivisible. For example,
-  `UpdateReaderList`'s list-then-query is a single step.
+  `UpdateReaderList`'s list-then-query is a single step, so a reader
+  vanishing between the two (which fails the query; the code then keeps its
+  current map until the next resync) isn't explored.

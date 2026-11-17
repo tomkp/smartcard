@@ -128,12 +128,14 @@ Detect(old, new) ==
     ELSE IF old.present /\ ~new.present THEN "removed"
     ELSE "none"
 
-\* CardEvent::Replaced (since 3.8.0): a card present before and after, but
-\* pcscd counted insertions/removals in between
+\* CardEvent::Replaced (added after 3.8.0): a card present before and
+\* after, and pcscd's counter moved forward in between. A counter pcscd
+\* restarted (reader plugged back in) can only move back here: the model's
+\* counts are small, so there is no 16-bit wrap.
 Swapped(old, new) ==
     /\ Design = "current"
     /\ old.present /\ new.present
-    /\ old.count # new.count
+    /\ new.count > old.count
 
 CardEvents(r, old, new) ==
     CASE Detect(old, new) = "inserted" -> <<Inserted(r)>>
@@ -186,14 +188,15 @@ AtrOf(R) == [r \in Readers |-> R[r].atr]
 \* R1 then R2: R2's final state, R1's events followed by R2's
 Then(R1, R2) == [r \in Readers |-> [R2[r] EXCEPT !.evs = R1[r].evs \o R2[r].evs]]
 
-\* Make R the monitor's state and send its events to JS. A reader the
-\* monitor stops tracking is no longer a replugged one.
+\* Make R the monitor's state and send its events to JS. A replugged
+\* reader stops being excused once JS is told an event about it (which
+\* brings JS's view of it up to date) or the monitor stops tracking it.
 Commit(R) ==
     /\ tracked' = TrackedOf(R)
     /\ last' = LastOf(R)
     /\ atr' = AtrOf(R)
     /\ Tell([r \in Readers |-> R[r].evs])
-    /\ replugged' = replugged \cap TrackedOf(R)
+    /\ replugged' = {r \in replugged \cap TrackedOf(R) : R[r].evs = <<>>}
 
 \* The body of the loop after SCardGetStatusChange succeeds. pnp: the PnP
 \* entry came back CHANGED.
@@ -243,12 +246,17 @@ Init ==
 -----------------------------------------------------------------------------
 (* The world *)
 
+\* Plugged in empty, or with a card already in it. pcscd doesn't count a
+\* card that is there when it creates the reader, so the counter starts at 0
+\* either way.
 Plug(r) ==
     /\ r \notin plugged
     /\ plugged' = plugged \cup {r}
     /\ count' = [count EXCEPT ![r] = 0]
     /\ replugged' = IF r \in tracked THEN replugged \cup {r} ELSE replugged
-    /\ UNCHANGED <<card, nextCard>>
+    /\ \/ UNCHANGED <<card, nextCard>>
+       \/ /\ card' = [card EXCEPT ![r] = nextCard]
+          /\ nextCard' = nextCard + 1
 
 Unplug(r) ==                      \* a card in it goes with it
     /\ r \in plugged
