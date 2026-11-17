@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [20, 22]
+        node: [20, 22, 24]
 
     steps:
       - name: Checkout repository
@@ -24,9 +24,15 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      # pcscd lets tests that need a PC/SC service (but no reader) run.
+      # Its polkit check refuses the runner's user, which has no local
+      # session ("Security violation"), so run it without polkit.
       - name: Install PC/SC dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
+        run: |
+          sudo apt-get update && sudo apt-get install -y libpcsclite-dev pcscd
+          sudo systemctl stop pcscd.socket pcscd.service
+          sudo pcscd --disable-polkit
 
       - name: Install dependencies
         run: npm install

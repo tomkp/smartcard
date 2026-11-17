@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
     MockCard,
     MockReader,
@@ -2687,4 +2688,69 @@ describe('Service outage recovery', () => {
 
         devices.stop();
     });
+});
+
+describe('Worker teardown with a running monitor (spec finding 4)', () => {
+    const addonPath = resolve(
+        __dirname,
+        '../../../build/Release/smartcard_napi.node'
+    );
+
+    // A worker starts a ReaderMonitor and exits, or is terminated, without
+    // calling stop(). It runs in a child process because the bug killed the
+    // whole process (SIGABRT): Node deleted the monitor's tsfn at teardown,
+    // then the destructor released it.
+    function runWorker(ending: 'exit' | 'terminate') {
+        const workerSource = `
+            const { parentPort } = require('node:worker_threads');
+            const addon = require(${JSON.stringify(addonPath)});
+            const monitor = new addon.ReaderMonitor();
+            let started = false;
+            try {
+                monitor.start(() => {});
+                started = true;
+            } catch (err) {
+                // Skip only when there is no PC/SC service to monitor
+                // (SCARD_E_NO_SERVICE, SCARD_E_SERVICE_STOPPED)
+                const noService = [0x8010001d, 0x8010001e].includes(err.code);
+                parentPort.postMessage(
+                    (noService ? 'unavailable: ' : 'start failed: ') + err.message
+                );
+            }
+            if (started) {
+                parentPort.postMessage('started');
+                if (${JSON.stringify(ending)} === 'exit') {
+                    setTimeout(() => process.exit(0), 100);
+                }
+            }
+        `;
+        const mainSource = `
+            const { Worker } = require('node:worker_threads');
+            const worker = new Worker(${JSON.stringify(workerSource)}, { eval: true });
+            worker.on('message', (message) => {
+                console.log(message);
+                if (message === 'started' && ${JSON.stringify(ending)} === 'terminate') {
+                    setTimeout(() => worker.terminate(), 100);
+                }
+            });
+        `;
+        return spawnSync(process.execPath, ['-e', mainSource], {
+            encoding: 'utf-8',
+            timeout: 30000,
+        });
+    }
+
+    for (const ending of ['exit', 'terminate'] as const) {
+        it(`does not crash when the worker ends with "${ending}"`, (t) => {
+            const result = runWorker(ending);
+            if (result.stdout.includes('unavailable: ')) {
+                t.skip(`no PC/SC service: ${result.stdout.trim()}`);
+                return;
+            }
+            const output = `${result.stdout}\n${result.stderr}`;
+            assert.match(result.stdout, /started/, output);
+            assert.strictEqual(result.signal, null, output);
+            assert.strictEqual(result.status, 0, output);
+        });
+    }
 });

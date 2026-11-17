@@ -51,19 +51,36 @@ ReaderMonitor::ReaderMonitor(const Napi::CallbackInfo& info)
       context_(0),
       contextValid_(false),
       running_(false),
-      tsfnActive_(false) {
+      tsfnActive_(false),
+      cleanupHookAdded_(false) {
 }
 
 ReaderMonitor::~ReaderMonitor() {
-    // Ensure monitoring is stopped
+    Shutdown();
+}
+
+// Stop the monitor thread and release the tsfn and the PC/SC context.
+// stop(), the destructor (GC, or Node finalizing objects at environment
+// teardown) and the environment cleanup hook all end up here.
+void ReaderMonitor::Shutdown() {
+    if (cleanupHookAdded_) {
+        napi_remove_env_cleanup_hook(Env(), OnEnvCleanup, this);
+        cleanupHookAdded_ = false;
+    }
+
     if (running_) {
         running_ = false;
+
+        // Cancel any blocking SCardGetStatusChange call. mutex_ guards
+        // context_/contextValid_ against the recovery path swapping them
+        // on the monitor thread.
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (contextValid_) {
                 SCardCancel(context_);
             }
         }
+
         if (monitorThread_.joinable()) {
             monitorThread_.join();
         }
@@ -79,7 +96,27 @@ ReaderMonitor::~ReaderMonitor() {
 
     if (contextValid_) {
         SCardReleaseContext(context_);
+        contextValid_ = false;
+        context_ = 0;
     }
+
+    readerStates_.clear();
+}
+
+// Node is tearing the environment down (a worker exiting or terminated)
+// with the monitor still running. The tsfn's own cleanup hook would close
+// it first and finalize this object only afterwards, so the destructor's
+// Release() would reach a tsfn Node has finished with: on Node 24.15+ it
+// locks the tsfn's mutex again (SIGABRT, or a hang on Linux); on Node
+// 20/22 it touches a tsfn being deleted, and the monitor thread may still
+// push to it (spec/README.md, finding 4). Node runs cleanup hooks newest
+// first, and start() adds this one after the tsfn has added its own, so
+// it stops the monitor while the tsfn is still alive.
+void ReaderMonitor::OnEnvCleanup(void* arg) {
+    auto* self = static_cast<ReaderMonitor*>(arg);
+    // Node drops the hook itself once it has run
+    self->cleanupHookAdded_ = false;
+    self->Shutdown();
 }
 
 Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
@@ -127,6 +164,10 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
     );
     tsfnActive_ = true;
 
+    // Added after the tsfn, so that at environment teardown it runs first
+    cleanupHookAdded_ =
+        napi_add_env_cleanup_hook(env, OnEnvCleanup, this) == napi_ok;
+
     // Start monitoring
     running_ = true;
     monitorThread_ = std::thread(&ReaderMonitor::MonitorLoop, this, sessionActive);
@@ -141,35 +182,7 @@ Napi::Value ReaderMonitor::Stop(const Napi::CallbackInfo& info) {
         return env.Undefined();
     }
 
-    running_ = false;
-
-    // Cancel any blocking SCardGetStatusChange call. mutex_ guards
-    // context_/contextValid_ against the recovery path swapping them
-    // on the monitor thread.
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (contextValid_) {
-            SCardCancel(context_);
-        }
-    }
-
-    // Wait for thread to finish
-    if (monitorThread_.joinable()) {
-        monitorThread_.join();
-    }
-
-    // Release thread-safe function
-    tsfn_.Release();
-    tsfnActive_ = false;
-
-    // Release context
-    if (contextValid_) {
-        SCardReleaseContext(context_);
-        contextValid_ = false;
-        context_ = 0;
-    }
-
-    readerStates_.clear();
+    Shutdown();
 
     return env.Undefined();
 }
