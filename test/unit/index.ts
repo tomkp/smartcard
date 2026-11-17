@@ -2688,6 +2688,65 @@ describe('Service outage recovery', () => {
 
         devices.stop();
     });
+
+    // The native monitor, back at its first retry, reports a card still in
+    // its reader as replaced: its handle died with the service
+    it('replaces a card held through the outage with one connected on the new context', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
+        const mockReader = new MockReader('ACR122U', mockCard);
+        const deadContext = new MockContext();
+        const liveContext = new MockContext();
+        deadContext.addReader(mockReader);
+        liveContext.addReader(mockReader);
+        const contexts = [deadContext, liveContext];
+        const mockMonitor = new MockReaderMonitor();
+        mockMonitor.attachReader(mockReader);
+
+        let liveLookups = 0;
+        const liveListReaders = liveContext.listReaders.bind(liveContext);
+        liveContext.listReaders = () => {
+            liveLookups++;
+            return liveListReaders();
+        };
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return contexts.shift();
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const inserted: Card[] = [];
+        const removed: (Card | null)[] = [];
+        const errors: Error[] = [];
+        devices.on('card-inserted', ({ card }: { card: Card }) => inserted.push(card));
+        devices.on('card-removed', ({ card }: { card: Card | null }) => removed.push(card));
+        devices.on('error', (err: Error) => errors.push(err));
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.strictEqual(inserted.length, 1);
+        const before = inserted[0];
+
+        deadContext.close();
+        mockMonitor.emitError('Service was stopped (0x8010001E)', 0x8010001e);
+        mockMonitor.recover();
+        mockMonitor.replaceCard('ACR122U');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Only the outage's own error
+        assert.strictEqual(errors.length, 1);
+        assert.deepStrictEqual(removed, [before]);
+        assert.strictEqual(inserted.length, 2);
+        assert.notStrictEqual(inserted[1], before);
+        assert.strictEqual(devices.getCard('ACR122U'), inserted[1]);
+        assert(liveLookups > 0, 'connected through the new context');
+
+        devices.stop();
+    });
 });
 
 // The native addon itself, for tests that need real PC/SC. They skip when

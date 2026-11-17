@@ -374,10 +374,22 @@ MonAttach ==
     /\ UNCHANGED <<monitorOnly, thread, result, changes>>
 
 \* while (running_ && sessionActive->load())
+\* ... and if an earlier error left no valid context, re-establish it
+\* first: under mutex_ it may emit (monitor-recovered and resync events, or
+\* every reader detached), and a failure emits an error. Either way it
+\* then pauses or goes on to wait, as after an error. Each attempt counts
+\* as a PC/SC result, so it is bounded like the others. (Current design;
+\* before, a failed re-establish was retried only through the next wait.)
 MonTop ==
     /\ mpc = "top"
-    /\ mpc' = IF SessionLive THEN "build" ELSE "exit"
-    /\ UNCHANGED <<monitorOnly, locked, thread, result, queue, changes, crash>>
+    /\ \/ /\ mpc' = IF SessionLive THEN "build" ELSE "exit"
+          /\ UNCHANGED changes
+       \/ /\ Design = "current"
+          /\ SessionLive
+          /\ changes < MaxChanges
+          /\ changes' = changes + 1
+          /\ mpc' \in {"error", "recover"}   \* fails (an error event), or succeeds
+    /\ UNCHANGED <<monitorOnly, locked, thread, result, queue, crash>>
 
 \* Build the states array under mutex_, then call SCardGetStatusChange.
 \* (The every-10-iterations refresh is left out: it behaves like the
@@ -452,9 +464,8 @@ MonReport ==
     /\ UNCHANGED <<monitorOnly, thread, result, changes>>
 
 \* Errors: EmitEvent("error") outside the lock, then under mutex_ either
-\* context recovery (monitor-recovered, then resync events) or
-\* (SCARD_E_UNKNOWN_READER) a resync, both of which may emit; then pause up
-\* to 1 s, which stop() cuts short
+\* releasing a dead context, or (SCARD_E_UNKNOWN_READER) a resync, which
+\* may emit; then pause up to 1 s, which stop() cuts short
 MonError ==
     /\ mpc = "error"
     /\ Push

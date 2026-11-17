@@ -115,17 +115,21 @@ describe('Virtual card', { skip: REQUIRED ? false : reason }, () => {
         }
     });
 
-    // pcscd stops for 12 s, longer than the monitor's periodic re-list, with
-    // a card in the reader. Card handles die with the service.
+    // pcscd stops for 12 s with a card in the reader. While the service is
+    // unavailable no reader can be used, so the monitor reports them
+    // detached once its first retry fails, and attaches them again when it
+    // recovers; the card comes back as a new Card (the old handle died).
     it(
-        'Devices replaces a card held through a service outage, and detaches no reader',
+        'Devices detaches the readers while the service is down, and reattaches them with a working card',
         {
             timeout: 90000,
             skip: RESTART_PCSCD ? false : 'set SMARTCARD_TEST_RESTART_PCSCD to let it restart pcscd',
         },
         async () => {
             const { devices, events, report } = watch();
+            const attached: string[] = [];
             const detached: string[] = [];
+            devices.on('reader-attached', ({ name }) => attached.push(name));
             devices.on('reader-detached', ({ name }) => detached.push(name));
             // A second monitor, stopped during the outage
             const monitor = new ReaderMonitor();
@@ -135,14 +139,17 @@ describe('Virtual card', { skip: REQUIRED ? false : reason }, () => {
                 monitor.start(() => {});
                 await waitFor(() => events.length >= 1, 'card-inserted', report);
                 const before = events[0].card!;
+                const readers = [...attached].sort();
+                attached.length = 0;
 
                 await pcscd.stop();
-                // The monitors are now pausing between retries
-                await new Promise((r) => setTimeout(r, 1500));
+                const down = Date.now();
+                await waitFor(() => detached.length >= readers.length, 'reader-detached', report);
+                const detachTook = Date.now() - down;
                 const t = Date.now();
                 monitor.stop();
                 const stopTook = Date.now() - t;
-                await new Promise((r) => setTimeout(r, 10500));
+                await new Promise((r) => setTimeout(r, 10000));
                 await pcscd.start();
                 await virtualCard.insert();
 
@@ -156,12 +163,18 @@ describe('Virtual card', { skip: REQUIRED ? false : reason }, () => {
                 const after = events[2].card!;
                 const response = await after.transmit(SELECT);
                 assert.strictEqual(response.toString('hex'), SELECT_RESPONSE);
-                assert.deepStrictEqual(detached, [], 'no reader was unplugged');
+                // Each reader detached once - at the first failed retry, not
+                // at the periodic re-list about 10 s later - and attached again
+                assert.deepStrictEqual([...detached].sort(), readers);
+                assert(detachTook < 5000, `readers detached ${detachTook} ms after the outage began`);
+                await waitFor(() => attached.length >= readers.length, 'reader-attached', report);
+                assert.deepStrictEqual([...attached].sort(), readers);
                 // It used to wait out a 1 s sleep
                 assert(stopTook < 250, `stop() during the outage took ${stopTook} ms`);
             } finally {
                 monitor.stop();
                 devices.stop();
+                await pcscd.ensureRunning();
                 await virtualCard.remove();
             }
         }

@@ -59,6 +59,10 @@ private:
         std::vector<uint8_t> atr;
     };
     std::unordered_map<std::string, ReaderInfo> readerStates_;
+    // A recovery's resync couldn't read the readers afresh, so the cards
+    // whose handles died in the outage are still to be reported (by the
+    // next resync that can)
+    bool outagePending_;
 
     // JavaScript methods
     Napi::Value Start(const Napi::CallbackInfo& info);
@@ -69,9 +73,10 @@ private:
     void Shutdown();
     static void OnEnvCleanup(void* arg);
     void MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive);
-    void UpdateReaderList();
+    bool UpdateReaderList();
     void ResyncReaderList(bool acrossOutage = false);
     LONG RecoverContext();
+    void DetachAllReaders();
     void PauseBeforeRetry(const std::shared_ptr<std::atomic<bool>>& sessionActive);
     // code: the PC/SC error code, for "error" events only
     void EmitEvent(const std::string& eventType, const std::string& readerName,

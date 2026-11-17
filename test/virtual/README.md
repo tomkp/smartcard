@@ -21,6 +21,13 @@ CI runs them on Linux with `SMARTCARD_VIRTUAL_CARD_REQUIRED` set. pcscd is
 started with `--disable-polkit`, because its polkit check refuses the
 runner's user.
 
+One test simulates a PC/SC service outage by stopping and starting pcscd.
+It runs only with `SMARTCARD_TEST_RESTART_PCSCD` set (CI and the Docker
+image set it), as root or with passwordless sudo, and only where pcscd was
+started by hand as `pcscd --disable-polkit`: the test starts it again that
+way, and with systemd's socket activation pcscd would restart itself as
+soon as the test checks whether it has stopped.
+
 ## Running them locally
 
 On Linux, install the packages and restart pcscd so that it loads vpcd:

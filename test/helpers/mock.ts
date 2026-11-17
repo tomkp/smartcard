@@ -333,6 +333,17 @@ export class MockReaderMonitor implements ReaderMonitor {
         }
     }
 
+    // A card still in its reader after an outage: its handle died, so the
+    // native monitor reports it removed, then inserted
+    replaceCard(readerName: string): void {
+        const reader = this._readers.find((r) => r.name === readerName);
+        if (reader && this._running) {
+            const state = reader.state;
+            this._emitEvent('card-removed', readerName, state, null);
+            this._emitEvent('card-inserted', readerName, state, reader.atr);
+        }
+    }
+
     removeCard(readerName: string): void {
         const reader = this._readers.find((r) => r.name === readerName);
         if (reader) {
@@ -350,8 +361,9 @@ export class MockReaderMonitor implements ReaderMonitor {
     }
 
     // The native monitor re-established its context after a service
-    // outage. In native order: the failed wait's error (emitError), then
-    // this, then whatever the outage resync finds (insertCard, removeCard,
+    // outage. In native order: an error for the failed wait, and one a
+    // second while the service stays down (emitError); then this; then
+    // what the outage resync finds (insertCard, removeCard, replaceCard,
     // ... after this call).
     recover(): void {
         if (this._running) {

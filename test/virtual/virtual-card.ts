@@ -144,39 +144,41 @@ function asRoot(command: string[]): number {
     return spawnSync(argv[0], argv.slice(1)).status ?? 1;
 }
 
-function serviceUp(): boolean {
+// pcscd is up with the virtual reader created (so vpcd listens for vicc)
+function readerUp(): boolean {
+    let context: PCSCContext;
     try {
-        new Context().close();
-        return true;
+        context = new Context();
     } catch {
         return false;
     }
+    try {
+        return readerState(context) !== null;
+    } finally {
+        context.close();
+    }
+}
+
+function pcscdRunning(): boolean {
+    return spawnSync('pgrep', ['-x', 'pcscd']).status === 0;
 }
 
 // Stop and start pcscd (RESTART_PCSCD)
 export const pcscd = {
     async stop(): Promise<void> {
         asRoot(['pkill', '-x', 'pcscd']);
-        await waitFor(
-            () => spawnSync('pgrep', ['-x', 'pcscd']).status !== 0 && !serviceUp(),
-            'pcscd to stop'
-        );
+        await waitFor(() => !pcscdRunning(), 'pcscd to stop');
     },
     async start(): Promise<void> {
         if (asRoot(['pcscd', '--disable-polkit']) !== 0) {
             throw new Error('could not start pcscd');
         }
-        // Up, with vpcd's reader created (and so listening for vicc)
-        await waitFor(() => {
-            if (!serviceUp()) {
-                return false;
-            }
-            const context = new Context();
-            try {
-                return readerState(context) !== null;
-            } finally {
-                context.close();
-            }
-        }, 'pcscd to start');
+        await waitFor(readerUp, 'pcscd to start');
+    },
+    // Start it again if a test stopped it and failed before restarting it
+    async ensureRunning(): Promise<void> {
+        if (!pcscdRunning()) {
+            await this.start();
+        }
     },
 };
