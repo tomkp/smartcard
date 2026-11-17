@@ -43,7 +43,7 @@ static bool IsContextFatal(LONG result) {
 static const int STATE_REFRESH_INTERVAL = 10;
 
 // Event data passed from worker thread to JS thread
-struct EventData {
+struct ReaderMonitor::EventData {
     std::string eventType;
     std::string readerName;
     DWORD state;
@@ -175,7 +175,7 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
     auto sessionActive = std::make_shared<std::atomic<bool>>(true);
 
     // Create thread-safe function
-    tsfn_ = MonitorEventTsfn::New(
+    tsfn_ = EventTsfn::New(
         env,
         callback,
         "ReaderMonitor",
@@ -183,7 +183,8 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
         1,          // 1 initial thread
         nullptr,    // No context
         [sessionActive](Napi::Env, void*, std::nullptr_t*) {
-            // Called when the tsfn is released (stop() or env teardown)
+            // Called when Node finalizes the tsfn: once it is released
+            // (stop()) and its queue has drained, or at environment teardown
             sessionActive->store(false);
         }
     );
@@ -659,7 +660,7 @@ bool ReaderMonitor::UpdateReaderList() {
 
 void ReaderMonitor::EmitEvent(const std::string& eventType, const std::string& readerName,
                                DWORD state, const std::vector<uint8_t>& atr, DWORD code) {
-    // Owned by the tsfn's queue from here: DeliverMonitorEvent frees it.
+    // Owned by the tsfn's queue from here: DeliverEvent frees it.
     // If the tsfn won't take it (closing), it was never queued.
     auto* data = new EventData{eventType, readerName, state, atr, code};
     if (tsfn_.BlockingCall(data) != napi_ok) {
@@ -667,8 +668,8 @@ void ReaderMonitor::EmitEvent(const std::string& eventType, const std::string& r
     }
 }
 
-void DeliverMonitorEvent(Napi::Env env, Napi::Function callback,
-                         std::nullptr_t* /*context*/, EventData* data) {
+void ReaderMonitor::DeliverEvent(Napi::Env env, Napi::Function callback,
+                                 std::nullptr_t* /*context*/, EventData* data) {
     std::unique_ptr<EventData> owned(data);
 
     // Node is draining the queue because the environment is being torn
@@ -678,6 +679,7 @@ void DeliverMonitorEvent(Napi::Env env, Napi::Function callback,
     }
 
     napi_value event;
+    napi_value recv;
     try {
         Napi::Object object = Napi::Object::New(env);
         object.Set("type", Napi::String::New(env, owned->eventType));
@@ -693,8 +695,13 @@ void DeliverMonitorEvent(Napi::Env env, Napi::Function callback,
             object.Set("code", Napi::Number::New(env, owned->code));
         }
         event = object;
-    } catch (const Napi::Error&) {
-        // The environment is shutting down and can no longer build it
+    } catch (const Napi::Error& e) {
+        // A live environment gets the exception, as before; one that is
+        // shutting down can't take it, and the event is dropped
+        napi_throw(env, e.Value());
+        return;
+    }
+    if (napi_get_undefined(env, &recv) != napi_ok) {
         return;
     }
 
@@ -704,5 +711,5 @@ void DeliverMonitorEvent(Napi::Env env, Napi::Function callback,
     // the event is dropped. callback.Call() turned that refusal into a C++
     // exception which node-addon-api, unable to throw it into JS, rethrew
     // into Node - std::terminate, killing the whole process.
-    napi_call_function(env, env.Undefined(), callback, 1, &event, nullptr);
+    napi_call_function(env, recv, callback, 1, &event, nullptr);
 }

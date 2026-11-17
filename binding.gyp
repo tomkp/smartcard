@@ -19,7 +19,11 @@
         ],
         "defines": [
             "NAPI_VERSION=8",
-            "NAPI_CPP_EXCEPTIONS"
+            "NAPI_CPP_EXCEPTIONS",
+            # A callback that runs while Node tears its environment down (a
+            # worker exiting) can't throw into JS; without this,
+            # node-addon-api rethrows that into Node: std::terminate
+            "NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS"
         ],
         "conditions": [
             ["OS=='win'", {
