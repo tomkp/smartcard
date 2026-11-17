@@ -24,9 +24,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      # pcscd lets tests that need a PC/SC service (but no reader) run
       - name: Install PC/SC dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev pcscd
 
       - name: Install dependencies
         run: npm install
