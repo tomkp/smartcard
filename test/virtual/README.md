@@ -12,12 +12,14 @@ hardware:
   it runs. The tests start and stop it to insert and remove the card.
 
 `npm run test:virtual` runs `test/virtual`, then the card tests in
-`test/integration` with the virtual card inserted
-(`scripts/with-virtual-card.js`). Without pcscd and vsmartcard every
-virtual test skips.
+`test/integration` with the virtual card inserted (`with-card.ts`). Without
+pcscd and vsmartcard both skip, unless `SMARTCARD_VIRTUAL_CARD_REQUIRED` is
+set: then a missing setup is a failure, and so is losing the card while
+the integration tests run (they would skip their card tests and pass).
 
-CI runs them on Linux. pcscd is started with `--disable-polkit`, because
-its polkit check refuses the runner's user.
+CI runs them on Linux with `SMARTCARD_VIRTUAL_CARD_REQUIRED` set. pcscd is
+started with `--disable-polkit`, because its polkit check refuses the
+runner's user.
 
 ## Running them locally
 

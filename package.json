@@ -43,7 +43,7 @@
         "test:unit": "npm run build:ts && node --test dist/test/unit/index.js",
         "test:integration": "npm run build:ts && node --test dist/test/integration/index.js",
         "test:native": "node-gyp configure --smartcard_build_tests=true && node-gyp build && node scripts/run-native-tests.js",
-        "test:virtual": "npm run build:ts && node --test dist/test/virtual/index.js && node scripts/with-virtual-card.js node --test dist/test/integration/index.js",
+        "test:virtual": "npm run build:ts && node --test dist/test/virtual/index.js && node dist/test/virtual/with-card.js node --test dist/test/integration/index.js",
         "test:coverage": "npm run build:ts && c8 --include=dist/lib/**/*.js node --test dist/test/unit/index.js",
         "typecheck": "tsc --noEmit",
         "coverage:report": "c8 report --reporter=text --reporter=html",

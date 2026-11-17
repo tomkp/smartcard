@@ -1,89 +1,23 @@
 /**
- * Tests against a virtual card, for what needs a card to come and go.
- *
- * Linux only, with pcscd and vsmartcard: the vpcd driver gives pcscd the
- * readers "Virtual PCD 00 00" and "Virtual PCD 00 01", and vicc, a card
- * emulator, is a card in the first one for as long as it runs. Every test
- * skips without them. CI installs them; see test/virtual/README.md to run
- * these locally (in Docker on macOS).
+ * Tests against vsmartcard's virtual card (see README.md here), for what
+ * needs a card to come and go. They skip without vsmartcard, unless
+ * SMARTCARD_VIRTUAL_CARD_REQUIRED is set (CI), when they fail instead.
  */
-import { describe, it, after } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import {
-    Context,
-    Devices,
-    SCARD_STATE_PRESENT,
-} from '../../lib';
+import { Devices } from '../../lib';
 import type { Card } from '../../lib/types';
-
-const READER = 'Virtual PCD 00 00';
-// ISO 7816 SELECT with no AID; the virtual card answers 6A 82
-const SELECT = Buffer.from([0x00, 0xa4, 0x04, 0x00, 0x00]);
-const TIMEOUT = 15000;
-
-function readerState(): number | null {
-    const context = new Context();
-    try {
-        const reader = context.listReaders().find((r) => r.name === READER);
-        return reader ? reader.state : null;
-    } finally {
-        context.close();
-    }
-}
-
-function cardPresent(): boolean {
-    const state = readerState();
-    return state !== null && (state & SCARD_STATE_PRESENT) !== 0;
-}
-
-// Why these tests can't run here, or undefined if they can
-function unavailable(): string | undefined {
-    if (spawnSync('vicc', ['--version']).status !== 0) {
-        return 'vicc (vsmartcard) is not installed';
-    }
-    try {
-        if (readerState() === null) {
-            return `pcscd has no "${READER}" (vsmartcard-vpcd)`;
-        }
-    } catch (err) {
-        return `no PC/SC service: ${(err as Error).message}`;
-    }
-    return undefined;
-}
-
-async function waitFor(condition: () => boolean, what: string): Promise<void> {
-    const deadline = Date.now() + TIMEOUT;
-    while (!condition()) {
-        if (Date.now() > deadline) {
-            throw new Error(`timed out waiting for ${what}`);
-        }
-        await new Promise((r) => setTimeout(r, 50));
-    }
-}
-
-// The card is in the reader while vicc runs
-class VirtualCard {
-    private vicc: ChildProcess | null = null;
-
-    async insert(): Promise<void> {
-        this.vicc = spawn('vicc', ['--type', 'iso7816'], { stdio: 'ignore' });
-        await waitFor(cardPresent, 'the virtual card to be inserted');
-    }
-
-    async remove(): Promise<void> {
-        const vicc = this.vicc;
-        this.vicc = null;
-        if (vicc === null || vicc.exitCode !== null) {
-            return;
-        }
-        const exited = new Promise((r) => vicc.once('exit', r));
-        vicc.kill();
-        await exited;
-        await waitFor(() => !cardPresent(), 'the virtual card to be removed');
-    }
-}
+import {
+    READER,
+    REQUIRED,
+    SELECT,
+    SELECT_RESPONSE,
+    VirtualCard,
+    unavailable,
+    waitFor,
+} from './virtual-card';
 
 interface CardEvent {
     type: 'card-inserted' | 'card-removed';
@@ -91,7 +25,13 @@ interface CardEvent {
 }
 
 // Devices, recording the card events for READER and every error
-function watch(): { devices: Devices; events: CardEvent[]; errors: Error[] } {
+function watch(): {
+    devices: Devices;
+    events: CardEvent[];
+    errors: Error[];
+    // waitFor's detail: what Devices reported, for timeout messages
+    report: () => string;
+} {
     const devices = new Devices();
     const events: CardEvent[] = [];
     const errors: Error[] = [];
@@ -102,56 +42,70 @@ function watch(): { devices: Devices; events: CardEvent[]; errors: Error[] } {
         if (reader.name === READER) events.push({ type: 'card-removed', card });
     });
     devices.on('error', (err) => errors.push(err));
-    return { devices, events, errors };
+    const report = () =>
+        `events [${events.map((e) => e.type).join(', ')}], ` +
+        `errors [${errors.map((e) => e.message).join('; ')}]`;
+    return { devices, events, errors, report };
 }
 
-const skip = unavailable();
+const reason = unavailable();
 
-describe('Virtual card', { skip }, () => {
+describe('Virtual card', { skip: REQUIRED ? false : reason }, () => {
     const virtualCard = new VirtualCard();
+    before(() => {
+        if (reason !== undefined) {
+            throw new Error(`the virtual card is required here: ${reason}`);
+        }
+    });
     after(() => virtualCard.remove());
 
     it('Devices reports a card inserted, which works, then removed', { timeout: 60000 }, async () => {
-        const { devices, events, errors } = watch();
+        const { devices, events, errors, report } = watch();
         devices.start();
         try {
             await virtualCard.insert();
-            await waitFor(() => events.length === 1, 'card-inserted');
-            assert.strictEqual(events[0].type, 'card-inserted');
+            await waitFor(() => events.length >= 1, 'card-inserted', report);
+            assert.deepStrictEqual(events.map((e) => e.type), ['card-inserted'], report());
             const card = events[0].card!;
             const response = await card.transmit(SELECT);
-            assert(response.length >= 2, 'a response with a status word');
+            assert.strictEqual(response.toString('hex'), SELECT_RESPONSE);
 
             await virtualCard.remove();
-            await waitFor(() => events.length === 2, 'card-removed');
-            assert.strictEqual(events[1].type, 'card-removed');
+            await waitFor(() => events.length >= 2, 'card-removed', report);
+            assert.deepStrictEqual(
+                events.map((e) => e.type),
+                ['card-inserted', 'card-removed'],
+                report()
+            );
             assert.strictEqual(events[1].card, card);
             assert.deepStrictEqual(errors, []);
         } finally {
             devices.stop();
+            await virtualCard.remove();
         }
     });
 
     it('Devices reports a replaced card as removed, then inserted', { timeout: 60000 }, async () => {
-        await virtualCard.insert();
-        const { devices, events, errors } = watch();
-        devices.start();
+        const { devices, events, errors, report } = watch();
         try {
+            await virtualCard.insert();
+            devices.start();
             // The card already in the reader
-            await waitFor(() => events.length === 1, 'card-inserted');
+            await waitFor(() => events.length >= 1, 'card-inserted', report);
             const first = events[0].card!;
 
             await virtualCard.remove();
             await virtualCard.insert();
-            await waitFor(() => events.length === 3, 'card-removed, card-inserted');
+            await waitFor(() => events.length >= 3, 'card-removed, card-inserted', report);
             assert.deepStrictEqual(
                 events.map((e) => e.type),
-                ['card-inserted', 'card-removed', 'card-inserted']
+                ['card-inserted', 'card-removed', 'card-inserted'],
+                report()
             );
             const second = events[2].card!;
             assert.notStrictEqual(second, first);
             const response = await second.transmit(SELECT);
-            assert(response.length >= 2, 'a response with a status word');
+            assert.strictEqual(response.toString('hex'), SELECT_RESPONSE);
             assert.deepStrictEqual(errors, []);
         } finally {
             devices.stop();
@@ -163,8 +117,8 @@ describe('Virtual card', { skip }, () => {
     // its own Cards; before #154 they shared one constructor reference,
     // and a worker's exit left the others using a dead one.
     it('connects in the main thread after a worker that connected exits', { timeout: 60000 }, async () => {
-        await virtualCard.insert();
         try {
+            await virtualCard.insert();
             const lib = resolve(__dirname, '../../lib');
             const useCard = `
                 async function useCard(lib) {
@@ -203,9 +157,12 @@ describe('Virtual card', { skip }, () => {
             const output = `${result.stdout}\n${result.stderr}`;
             assert.strictEqual(result.signal, null, output);
             assert.strictEqual(result.status, 0, output);
-            assert.match(result.stdout, /^main [0-9a-f]{4,}$/m, output);
-            assert.match(result.stdout, /^worker [0-9a-f]{4,}$/m, output);
-            assert.match(result.stdout, /^main again [0-9a-f]{4,}$/m, output);
+            for (const who of ['main', 'worker', 'main again']) {
+                assert(
+                    result.stdout.includes(`${who} ${SELECT_RESPONSE}\n`),
+                    `${who} should get ${SELECT_RESPONSE}:\n${output}`
+                );
+            }
         } finally {
             await virtualCard.remove();
         }

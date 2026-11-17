@@ -48,4 +48,7 @@ jobs:
 
       - name: Run virtual card tests (Linux)
         if: runner.os == 'Linux'
+        timeout-minutes: 10
+        env:
+          SMARTCARD_VIRTUAL_CARD_REQUIRED: 1
         run: npm run test:virtual

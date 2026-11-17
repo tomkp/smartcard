@@ -9,6 +9,7 @@ tar -C /src --exclude=./node_modules --exclude=./build --exclude=./dist \
 cd /work
 npm ci --no-audit --no-fund
 pcscd --disable-polkit
+export SMARTCARD_VIRTUAL_CARD_REQUIRED=1
 if [ "$#" -eq 0 ]; then
     set -- npm run test:virtual
 fi
