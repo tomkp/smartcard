@@ -9,11 +9,13 @@
 (* monitor just runs.                                                      *)
 (*                                                                         *)
 (* PC/SC behaviour follows pcsc-lite's SCardGetStatusChange                *)
-(* (src/winscard_clnt.c): an entry is CHANGED when the reader's state      *)
-(* differs from the dwCurrentState passed in, including the per-reader     *)
-(* event counter in the upper 16 bits; the "\\?PnP?\Notification" entry,   *)
-(* passed SCARD_STATE_UNAWARE as the monitor does, is CHANGED only if the  *)
-(* number of readers changes while the call is in progress.                *)
+(* (src/winscard_clnt.c): the call fails with SCARD_E_UNKNOWN_READER if    *)
+(* any reader it is passed no longer exists; otherwise an entry is CHANGED *)
+(* when the reader's state differs from the dwCurrentState passed in,      *)
+(* including the per-reader event counter in the upper 16 bits; the        *)
+(* "\\?PnP?\Notification" entry, passed SCARD_STATE_UNAWARE as the monitor *)
+(* does, is CHANGED only if the number of readers changes while the call   *)
+(* is in progress.                                                         *)
 (*                                                                         *)
 (* Granularity: a wait that returns is processed in the same atomic step,  *)
 (* so the world can only move between waits - while the monitor is busy    *)
@@ -42,6 +44,7 @@ VARIABLES
     last,         \* last[r]: readerStates_[r].lastState
     atr,          \* atr[r]: readerStates_[r].atr
     pnpBase,      \* the reader count when the blocked wait began
+    failed,       \* the last SCardGetStatusChange failed (SCARD_E_UNKNOWN_READER)
     \* what the events have told JS
     jsReaders,    \* readers JS has been told are attached
     jsCard,       \* jsCard[r]: the card JS thinks is in r, 0 if none
@@ -50,7 +53,7 @@ VARIABLES
 world == <<plugged, card, count, nextCard, steps>>
 js == <<jsReaders, jsCard, bad>>
 vars == <<plugged, card, count, nextCard, steps, mpc, tracked, last, atr,
-          pnpBase, jsReaders, jsCard, bad>>
+          pnpBase, failed, jsReaders, jsCard, bad>>
 
 -----------------------------------------------------------------------------
 (* What SCardGetStatusChange reports for a reader: dwEventState without   *)
@@ -65,10 +68,15 @@ Observe(r) ==
     THEN [kind |-> "known", present |-> card[r] # 0, count |-> count[r]]
     ELSE [kind |-> "unknown", present |-> FALSE, count |-> 0]
 
-\* pcsc-lite sets SCARD_STATE_CHANGED for reader r, given dwCurrentState cur
+\* Before waiting, pcsc-lite checks that every reader it was passed exists.
+\* If one doesn't, the whole call fails with SCARD_E_UNKNOWN_READER.
+UnknownReader(T) == \E r \in T : r \notin plugged
+
+\* pcsc-lite sets SCARD_STATE_CHANGED for reader r, given dwCurrentState cur.
+\* (A reader that vanishes during a blocked wait comes back UNKNOWN.)
 Changed(r, cur) ==
     IF r \notin plugged
-    THEN cur.kind # "unknown"                    \* the reader vanished
+    THEN cur.kind # "unknown"                    \* vanished during the wait
     ELSE \/ cur.kind # "known"                   \* UNAWARE, or the reader came back
          \/ cur.present # (card[r] # 0)
          \/ cur.count # 0 /\ cur.count # count[r] \* counter checked only if nonzero
@@ -144,9 +152,10 @@ OnChanged(T, L, A) ==
                        ELSE Keep(T, L, A, r)]
 
 \* After a timeout: RefreshAllReaderStates, an UNAWARE re-read of every
-\* tracked reader
+\* tracked reader. If that read fails, it changes nothing.
 RefreshAll(T, L, A) ==
-    [r \in Readers |-> IF r \in T THEN ApplyCard(r, L[r], A[r]) ELSE Keep(T, L, A, r)]
+    [r \in Readers |-> IF r \in T /\ ~UnknownReader(T) THEN ApplyCard(r, L[r], A[r])
+                       ELSE Keep(T, L, A, r)]
 
 \* ResyncReaderList: UpdateReaderList (re-list, re-seed every reader from an
 \* UNAWARE read), then emit the difference
@@ -180,9 +189,7 @@ Commit(R) ==
 \* entry came back CHANGED.
 Process(pnp) ==
     LET R1 == OnChanged(tracked, last, atr)
-        \* candidate fix: a tracked reader came back UNKNOWN, so the list changed
-        vanished == \E r \in tracked : Changed(r, last[r]) /\ r \notin plugged
-        R == IF pnp \/ (Fixed /\ vanished)
+        R == IF pnp
              THEN Then(R1, Resync(TrackedOf(R1), LastOf(R1), AtrOf(R1)))
              ELSE R1
     IN Commit(R)
@@ -200,6 +207,7 @@ TypeOK ==
     /\ last \in [Readers -> Snap]
     /\ atr \in [Readers -> Nat]
     /\ pnpBase \in Nat
+    /\ failed \in BOOLEAN
     /\ jsReaders \subseteq Readers
     /\ jsCard \in [Readers -> Nat]
     /\ bad \in BOOLEAN
@@ -215,6 +223,7 @@ Init ==
     /\ last = [r \in Readers |-> Unaware]
     /\ atr = [r \in Readers |-> 0]
     /\ pnpBase = 0
+    /\ failed = FALSE
     /\ jsReaders = {}
     /\ jsCard = [r \in Readers |-> 0]
     /\ bad = FALSE
@@ -253,7 +262,7 @@ World ==
     /\ steps < MaxEnvSteps
     /\ steps' = steps + 1
     /\ \E r \in Readers : Plug(r) \/ Unplug(r) \/ Insert(r) \/ Remove(r)
-    /\ UNCHANGED <<mpc, tracked, last, atr, pnpBase, jsReaders, jsCard, bad>>
+    /\ UNCHANGED <<mpc, tracked, last, atr, pnpBase, failed, jsReaders, jsCard, bad>>
 
 -----------------------------------------------------------------------------
 (* MonitorLoop *)
@@ -263,17 +272,28 @@ Start ==
     /\ mpc = "start"
     /\ Commit(Resync({}, last, atr))
     /\ mpc' = "top"
-    /\ UNCHANGED <<world, pnpBase>>
+    /\ UNCHANGED <<world, pnpBase, failed>>
 
 \* Call SCardGetStatusChange with dwCurrentState = lastState for each
-\* tracked reader, plus the PnP entry as SCARD_STATE_UNAWARE. If an entry
-\* already differs it returns at once; otherwise it blocks.
+\* tracked reader, plus the PnP entry as SCARD_STATE_UNAWARE. It fails if a
+\* tracked reader has gone; returns at once if an entry already differs;
+\* otherwise blocks.
 BeginWait ==
     /\ mpc = "top"
-    /\ IF \E r \in tracked : Changed(r, last[r])
-       THEN Process(FALSE) /\ UNCHANGED <<mpc, pnpBase>>
-       ELSE /\ mpc' = "blocked"
+    /\ CASE UnknownReader(tracked) ->
+            \* The error path: emit "error", sleep 1 s, loop. Not a
+            \* context-fatal error, so nothing is re-listed.
+            \* Candidate fix: re-list the readers.
+            /\ failed' = TRUE
+            /\ IF Fixed THEN Commit(Resync(tracked, last, atr))
+               ELSE UNCHANGED <<tracked, last, atr, js>>
+            /\ UNCHANGED <<mpc, pnpBase>>
+         [] \E r \in tracked : Changed(r, last[r]) ->
+            Process(FALSE) /\ failed' = FALSE /\ UNCHANGED <<mpc, pnpBase>>
+         [] OTHER ->
+            /\ mpc' = "blocked"
             /\ pnpBase' = Cardinality(plugged)
+            /\ failed' = FALSE
             /\ UNCHANGED <<tracked, last, atr, js>>
     /\ UNCHANGED world
 
@@ -286,7 +306,7 @@ Wake ==
        /\ Process(pnp)
     /\ mpc' = "top"
     /\ pnpBase' = 0
-    /\ UNCHANGED world
+    /\ UNCHANGED <<world, failed>>
 
 \* The 1 s timeout. (It can race with a change, so it is always enabled
 \* while blocked. The every-10-iterations refresh does the same work, so it
@@ -296,7 +316,7 @@ Timeout ==
     /\ Commit(IF Fixed THEN Resync(tracked, last, atr) ELSE RefreshAll(tracked, last, atr))
     /\ mpc' = "top"
     /\ pnpBase' = 0
-    /\ UNCHANGED world
+    /\ UNCHANGED <<world, failed>>
 
 Next == World \/ Start \/ BeginWait \/ Wake \/ Timeout
 
@@ -330,10 +350,9 @@ PresenceConverges ==
 \* ...and which card it is
 CardsConverge == <>[](\A r \in jsReaders \cap plugged : jsCard[r] = card[r])
 
-\* The monitor keeps going back to sleep in the wait instead of spinning.
-\* (A spin that changes nothing is, to TLA+, stuttering: TLC's trace ends
-\* in "Stuttering" with the monitor at "top", returning from every wait at
-\* once.)
-Settles == []<>(mpc = "blocked")
+\* The monitor keeps getting back into a working wait, instead of failing
+\* every call. (A loop that changes nothing is, to TLA+, stuttering: TLC's
+\* trace ends in "Stuttering" or loops back to the same state.)
+KeepsWaiting == []<>(mpc = "blocked")
 
 =============================================================================

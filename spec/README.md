@@ -14,8 +14,10 @@ change in the same PR.
 ## Running
 
 You need Java 11 or later. `spec/check.sh` runs every config in `cfg/` and
-checks that TLC returns the verdict written on the config's first line. It
-takes about 30 s, and CI runs it (`.github/workflows/spec.yml`). On first use,
+checks that TLC returns the verdict written on the config's first line. An
+optional second line, `\* Trace:`, gives text the counterexample must contain,
+such as which crash it reaches. It takes about 30 s. CI
+(`.github/workflows/spec.yml`) runs it when `spec/` changes. On first use,
 `tlc.sh` downloads `tla2tools.jar` v1.7.4 into `.tools/` and checks its
 SHA-256.
 
@@ -61,11 +63,11 @@ Two ideas have no counterpart in Z:
 | `Lifecycle-boundedq` | What if the tsfn queue were bounded? | Deadlock |
 | `Lifecycle-notimeout` | What if the wait had no timeout? | `stop()` can hang forever |
 | `Lifecycle-teardown` | Node tears down the environment while the monitor runs | Use-after-free |
-| `Events-safety` | Events are well formed and card presence converges (3 readers, 6 world steps) | No errors |
+| `Events-safety` | Every event makes sense, and the monitor tracks the readers JS was told about (3 readers, 6 world steps) | No errors |
 | `Events-swap` | JS learns which card is in the reader | Violated |
 | `Events-newreader` | JS learns about every reader that is plugged in | Violated |
 | `Events-gonereader` | JS learns about every reader that goes away | Violated |
-| `Events-spin` | The loop goes back to sleep instead of spinning | Violated |
+| `Events-deaf` | JS learns whether each reader holds a card | Violated |
 | `Events-fixed` | Every event property, with the candidate fixes applied | No errors |
 
 The two pre-#139 configs reproduce, step for step, the two bugs that #139's
@@ -114,26 +116,31 @@ call, so the wait blocks. On timeout, `RefreshAllReaderStates` re-reads only
 the readers already tracked. r1 stays unannounced until some other reader
 event happens.
 
-### 3. A reader unplugged between two waits is never removed, and an empty one makes the loop spin
+### 3. A reader unplugged between two waits makes the monitor go deaf
 
-This is `Events-gonereader` and `Events-spin`. Empty reader r1 is announced,
-then unplugged before the next wait. From then on every wait returns at once:
-r1's entry comes back UNKNOWN and CHANGED, because `lastState` lacks the
-UNKNOWN bit. `ApplyCardStateChange` emits nothing and, by design, does not
-commit an unknown reading ([`reader_monitor.cpp:194-198`](https://github.com/tomkp/smartcard/blob/f3d782eb1a57603ae1934dc90dba2feeb9715281/src/reader_monitor.cpp#L194-L198)). So `lastState`
-stays the same and the next wait returns at once too. The PnP entry never
-fires. The result is a busy loop, and JS still thinks r1 is attached. TLC
-prints this as `Stuttering`, because to TLA+ a step that changes nothing is
-a stutter.
+This is `Events-gonereader` and `Events-deaf`. Before waiting, pcsc-lite
+checks every reader name it is passed. If one no longer exists, the whole
+`SCardGetStatusChange` call fails with `SCARD_E_UNKNOWN_READER`. So once a
+tracked reader is unplugged between waits, every main wait fails. The error
+path ([`reader_monitor.cpp:291-336`](https://github.com/tomkp/smartcard/blob/f3d782eb1a57603ae1934dc90dba2feeb9715281/src/reader_monitor.cpp#L291-L336)) emits an `error` event,
+sleeps 1 s and tries again with the same reader list. That error isn't
+context-fatal, so the reader list is never refreshed. The periodic
+`RefreshAllReaderStates` fails the same way and changes nothing.
 
-If r1 held a card, the outcome differs: `card-removed` is emitted, the
-UNKNOWN state is committed and the wait blocks normally, but
-`reader-detached` never comes.
+The monitor stays in this state until the reader is plugged back in or the
+monitor is restarted. Meanwhile:
 
-The code comment says "the PnP path handles vanished readers". That holds
-only when the reader vanishes during a wait. A mutation test confirms the
-cause: committing the unknown reading removes the spin but not the phantom
-reader.
+- JS gets one `error` event per second, with code `0x80100009`.
+- JS is never told the reader has gone (`Events-gonereader`). If it held a
+  card, there is no `card-removed` either.
+- Card events on every other reader are lost (`Events-deaf`). In TLC's trace,
+  readers r1 and r2 are announced and a card goes into r1. Then r2 is
+  unplugged before the next wait. The wait fails (`failed = TRUE`), and JS
+  never hears about the card in r1.
+
+The code comment says "the PnP path handles vanished readers". That holds only
+when the reader vanishes *during* a wait: pcsc-lite then reports that reader
+as UNKNOWN and the PnP entry fires.
 
 ### 4. Node tearing down the environment while the monitor runs: use-after-free
 
@@ -183,8 +190,8 @@ worker-termination test under ASan would settle it.
    re-lists the readers, instead of `RefreshAllReaderStates`. The periodic
    refresh should do the same, or continuous card activity on one reader can
    delay the re-list.
-3. **Missed detaches and the spin.** When a tracked reader's entry comes back
-   UNKNOWN, call `ResyncReaderList`.
+3. **Missed detaches.** When `SCardGetStatusChange` fails with
+   `SCARD_E_UNKNOWN_READER`, call `ResyncReaderList`.
 
 With fix 2 in place, the PnP entry becomes a latency optimisation:
 removing the PnP resync from the fixed model still passes. On pcsc-lite

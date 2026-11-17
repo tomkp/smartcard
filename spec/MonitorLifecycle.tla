@@ -143,14 +143,14 @@ Cancel ==
     ELSE UNCHANGED <<mpc, result>>
 
 \* The callback passed to ThreadSafeFunction::New, run by Node when it
-\* finalizes session s's tsfn
-Finalizer(s) ==
+\* finalizes the tsfns of the sessions in S
+Finalizers(S) ==
     IF Design = "current"
-    THEN /\ active' = [active EXCEPT ![s] = FALSE]    \* sessionActive->store(false)
-         /\ UNCHANGED <<running, crash>>
+    THEN /\ active' = [s \in Sessions |-> IF s \in S THEN FALSE ELSE active[s]]
+         /\ UNCHANGED <<running, crash>>              \* sessionActive->store(false)
     ELSE /\ UNCHANGED active                          \* [this] { running_ = false; }
-         /\ IF alive
-            THEN running' = FALSE /\ UNCHANGED crash
+         /\ IF S = {} THEN UNCHANGED <<running, crash>>
+            ELSE IF alive THEN running' = FALSE /\ UNCHANGED crash
             ELSE /\ crash' = "use-after-free: tsfn finalizer wrote running_ on a destroyed ReaderMonitor"
                  /\ UNCHANGED running
 
@@ -275,7 +275,7 @@ Finalize(s) ==
     /\ tsfn[s] = "released"
     /\ queue[s] = 0
     /\ tsfn' = [tsfn EXCEPT ![s] = "deleted"]
-    /\ Finalizer(s)
+    /\ Finalizers({s})
     /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine, result,
                    sessions, queue, jpc, changes, torn>>
 
@@ -292,14 +292,7 @@ Teardown ==
     /\ LET doomed == {s \in Sessions : tsfn[s] \in {"live", "released"}} IN
        /\ tsfn' = [s \in Sessions |-> IF s \in doomed THEN "deleted" ELSE tsfn[s]]
        /\ queue' = [s \in Sessions |-> IF s \in doomed THEN 0 ELSE queue[s]]
-       /\ IF Design = "current"
-          THEN /\ active' = [s \in Sessions |-> IF s \in doomed THEN FALSE ELSE active[s]]
-               /\ UNCHANGED <<running, crash>>
-          ELSE /\ UNCHANGED active
-               /\ IF doomed = {} THEN UNCHANGED <<running, crash>>
-                  ELSE IF alive THEN running' = FALSE /\ UNCHANGED crash
-                  ELSE /\ crash' = "use-after-free: tsfn finalizer wrote running_ on a destroyed ReaderMonitor"
-                       /\ UNCHANGED running
+       /\ Finalizers(doomed)
     /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine, result,
                    sessions, jpc, changes>>
 

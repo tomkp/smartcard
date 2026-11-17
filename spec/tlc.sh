@@ -9,7 +9,7 @@ jar="$here/.tools/tla2tools-$version.jar"
 
 if [ ! -f "$jar" ]; then
     mkdir -p "$here/.tools"
-    curl -sSfL -o "$jar.part" \
+    curl -sSfL --retry 3 -o "$jar.part" \
         "https://github.com/tlaplus/tlaplus/releases/download/$version/tla2tools.jar"
     if command -v sha256sum >/dev/null 2>&1; then
         got=$(sha256sum "$jar.part" | cut -d' ' -f1)
