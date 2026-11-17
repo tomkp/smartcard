@@ -27,6 +27,8 @@ CONSTANTS
     WithTeardown,  \* Node may tear the environment down (e.g. a worker exits)
     HookRunsFirst, \* at teardown the monitor's cleanup hook runs before the
                    \*   tsfn's (start() adds it after creating the tsfn)
+    SafeDelivery,  \* delivering an event copes with an environment that can no
+                   \*   longer run JS, and frees the event either way (#157)
     WithGC         \* GC may collect the ReaderMonitor (run its destructor)
 
 ASSUME /\ MaxSessions \in Nat \ {0}
@@ -36,6 +38,7 @@ ASSUME /\ MaxSessions \in Nat \ {0}
        /\ Design \in {"current", "v3.8", "pre139"}
        /\ WithTeardown \in BOOLEAN
        /\ HookRunsFirst \in BOOLEAN
+       /\ SafeDelivery \in BOOLEAN
        /\ WithGC \in BOOLEAN
 
 Sessions == 1..MaxSessions
@@ -64,11 +67,15 @@ VARIABLES
                  \*   "dead" once the destructor has finished
     \* the environment
     changes,     \* changes/errors PC/SC has reported so far
-    torn,        \* Node has torn the environment down
+    dying,       \* Node has begun tearing the environment down: JS can no
+                 \*   longer run
+    torn,        \* Node has torn the environment down (deleted the tsfns)
+    leaked,      \* events were dropped without being freed
     crash        \* "none", or the fatal thing that happened
 
 vars == <<running, locked, tsfnOf, tsfnActive, thread, alive, mpc, mine,
-          result, sessions, active, queue, tsfn, jpc, changes, torn, crash>>
+          result, sessions, active, queue, tsfn, jpc, changes, dying, torn,
+          leaked, crash>>
 
 MonitorPCs == {"none", "init", "attach", "top", "build", "waiting", "woken",
                "process", "refresh", "report", "error", "recover", "exit"}
@@ -92,7 +99,9 @@ TypeOK ==
     /\ tsfn \in [Sessions -> TsfnStates]
     /\ jpc \in JsPCs
     /\ changes \in 0..MaxChanges
+    /\ dying \in BOOLEAN
     /\ torn \in BOOLEAN
+    /\ leaked \in BOOLEAN
     /\ crash \in STRING
 
 Init ==
@@ -111,7 +120,9 @@ Init ==
     /\ tsfn = [s \in Sessions |-> "unused"]
     /\ jpc = "idle"
     /\ changes = 0
+    /\ dying = FALSE
     /\ torn = FALSE
+    /\ leaked = FALSE
     /\ crash = "none"
 
 -----------------------------------------------------------------------------
@@ -163,7 +174,7 @@ Finalizers(S) ==
 (* The JS main thread *)
 
 \* JS can only call into the monitor when it is not blocked inside it
-JsReady == jpc = "idle" /\ alive /\ ~torn
+JsReady == jpc = "idle" /\ alive /\ ~dying
 
 \* start(callback)
 JsStart ==
@@ -185,6 +196,7 @@ JsStart ==
        /\ mpc' = "init"
        /\ mine' = s
     /\ UNCHANGED <<locked, alive, result, queue, jpc, changes, torn>>
+    /\ UNCHANGED <<dying, leaked>>
 
 \* stop(): running_ = false, then cancel, join, release
 JsStop ==
@@ -194,6 +206,7 @@ JsStop ==
     /\ jpc' = "stopping"
     /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine, result,
                    sessions, active, queue, tsfn, changes, torn, crash>>
+    /\ UNCHANGED <<dying, leaked>>
 
 StopCancel ==
     /\ jpc = "stopping"
@@ -202,6 +215,7 @@ StopCancel ==
     /\ jpc' = "joining"
     /\ UNCHANGED <<running, locked, tsfnOf, tsfnActive, thread, alive, mine,
                    sessions, active, queue, tsfn, changes, torn, crash>>
+    /\ UNCHANGED <<dying, leaked>>
 
 StopJoin ==
     /\ jpc = "joining"
@@ -213,6 +227,7 @@ StopJoin ==
     /\ jpc' = "idle"
     /\ UNCHANGED <<running, locked, tsfnOf, alive, mpc, mine, result,
                    sessions, active, queue, changes, torn>>
+    /\ UNCHANGED <<dying, leaked>>
 
 \* ~ReaderMonitor, run by GC - or by Node, which finalizes every ObjectWrap
 \* at teardown
@@ -224,6 +239,7 @@ JsDestroy ==
        ELSE UNCHANGED running /\ jpc' = "dtorEnd"
     /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine, result,
                    sessions, active, queue, tsfn, changes, torn, crash>>
+    /\ UNCHANGED <<dying, leaked>>
 
 DtorCancel ==
     /\ jpc = "dtorCancel"
@@ -232,6 +248,7 @@ DtorCancel ==
     /\ jpc' = "dtorJoin"
     /\ UNCHANGED <<running, locked, tsfnOf, tsfnActive, thread, alive, mine,
                    sessions, active, queue, tsfn, changes, torn, crash>>
+    /\ UNCHANGED <<dying, leaked>>
 
 DtorJoin ==
     /\ jpc = "dtorJoin"
@@ -240,6 +257,7 @@ DtorJoin ==
     /\ jpc' = "dtorEnd"
     /\ UNCHANGED <<running, locked, tsfnOf, tsfnActive, alive, mpc, mine, result,
                    sessions, active, queue, tsfn, changes, torn, crash>>
+    /\ UNCHANGED <<dying, leaked>>
 
 \* Release the tsfn if stop() never did (#139 added this), then the members
 \* are destroyed: a still-joinable std::thread member terminates the process
@@ -256,36 +274,43 @@ DtorEnd ==
     /\ jpc' = "dead"
     /\ UNCHANGED <<running, locked, tsfnOf, thread, mpc, mine, result,
                    sessions, active, queue, changes, torn>>
+    /\ UNCHANGED <<dying, leaked>>
 
 -----------------------------------------------------------------------------
 (* Node's event loop. It keeps running after the ReaderMonitor is gone, but *)
 (* not while the JS thread is blocked in stop() or the destructor, and not  *)
-(* after teardown.                                                           *)
+(* once the tsfns are torn down. Node runs it once more as teardown begins, *)
+(* before the cleanup hooks, when JS can no longer run (dying).             *)
 
-LoopFree == jpc \in {"idle", "dead"} /\ ~torn
+LoopRuns == jpc \in {"idle", "dead"} /\ ~torn
 
-\* Run one queued callback
+\* Run one queued callback. While dying, the call into JS fails; before
+\* #157 node-addon-api rethrew that into Node.
 Dispatch(s) ==
-    /\ LoopFree
+    /\ LoopRuns
     /\ tsfn[s] \in {"live", "released"}
     /\ queue[s] > 0
     /\ queue' = [queue EXCEPT ![s] = @ - 1]
+    /\ crash' = IF dying /\ ~SafeDelivery
+                THEN "std::terminate: an event delivered after the environment stopped running JS"
+                ELSE crash
     /\ UNCHANGED <<running, locked, tsfnOf, tsfnActive, thread, alive, mpc, mine,
-                   result, sessions, active, tsfn, jpc, changes, torn, crash>>
+                   result, sessions, active, tsfn, jpc, changes, dying, torn, leaked>>
 
 \* A released tsfn whose queue has drained is closed: Node runs the
 \* finalizer, then deletes it
 Finalize(s) ==
-    /\ LoopFree
+    /\ LoopRuns
     /\ tsfn[s] = "released"
     /\ queue[s] = 0
     /\ tsfn' = [tsfn EXCEPT ![s] = "deleted"]
     /\ Finalizers({s})
     /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine, result,
-                   sessions, queue, jpc, changes, torn>>
+                   sessions, queue, jpc, changes, dying, torn, leaked>>
 
-\* Environment teardown (a worker exiting, say). Node runs the environment's
-\* cleanup hooks on the JS thread, newest first, with the event loop stopped.
+\* Environment teardown (a worker exiting, say). It begins (dying): JS can
+\* no longer run, though the event loop runs once more (above). Then Node
+\* runs the environment's cleanup hooks on the JS thread, newest first.
 \*
 \* The tsfn's hook closes it whatever its thread count: Node runs the
 \* finalizer, drops the queue and deletes it (node_api.cc: Cleanup ->
@@ -296,6 +321,9 @@ Finalize(s) ==
 DeleteTsfns ==
     LET doomed == {s \in Sessions : tsfn[s] \in {"live", "released"}} IN
     /\ torn' = TRUE
+    \* The queue is handed to the delivery function with no env; before
+    \* #157 node-addon-api returned without freeing the events
+    /\ leaked' = (leaked \/ (~SafeDelivery /\ \E s \in doomed : queue[s] > 0))
     /\ tsfn' = [s \in Sessions |-> IF s \in doomed THEN "deleted" ELSE tsfn[s]]
     /\ queue' = [s \in Sessions |-> IF s \in doomed THEN 0 ELSE queue[s]]
     /\ Finalizers(doomed)
@@ -306,19 +334,28 @@ DeleteTsfns ==
 \* HookRunsFirst.
 HookAdded == Design = "current" /\ tsfnActive
 
-Teardown ==
+TeardownBegin ==
     /\ WithTeardown
+    /\ ~dying
+    /\ jpc \in {"idle", "dead"}
+    /\ dying' = TRUE
+    /\ UNCHANGED <<running, locked, tsfnOf, tsfnActive, thread, alive, mpc, mine,
+                   result, sessions, active, queue, tsfn, jpc, changes, torn,
+                   leaked, crash>>
+
+Teardown ==
+    /\ dying
     /\ ~torn
     /\ jpc \in {"idle", "dead"}
     /\ IF HookAdded
        THEN /\ jpc' = "hookStart"
             /\ IF HookRunsFirst
-               THEN UNCHANGED <<running, active, queue, tsfn, torn, crash>>
+               THEN UNCHANGED <<running, active, queue, tsfn, torn, leaked, crash>>
                ELSE DeleteTsfns
        ELSE /\ DeleteTsfns
             /\ UNCHANGED jpc
     /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine, result,
-                   sessions, changes>>
+                   sessions, changes, dying>>
 
 \* OnEnvCleanup -> Shutdown(): running_ = false, then cancel and join as
 \* stop() does
@@ -328,6 +365,7 @@ HookStart ==
     /\ jpc' = "hookCancel"
     /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine, result,
                    sessions, active, queue, tsfn, changes, torn, crash>>
+    /\ UNCHANGED <<dying, leaked>>
 
 HookCancel ==
     /\ jpc = "hookCancel"
@@ -336,6 +374,7 @@ HookCancel ==
     /\ jpc' = "hookJoin"
     /\ UNCHANGED <<running, locked, tsfnOf, tsfnActive, thread, alive, mine,
                    sessions, active, queue, tsfn, changes, torn, crash>>
+    /\ UNCHANGED <<dying, leaked>>
 
 \* join(), then Release(); then, if it hasn't run yet, the tsfn's own hook
 HookJoin ==
@@ -347,16 +386,16 @@ HookJoin ==
     /\ IF torn
        THEN /\ tsfn' = Released
             /\ crash' = ReleaseCrash
-            /\ UNCHANGED <<running, active, queue, torn>>
+            /\ UNCHANGED <<running, active, queue, torn, leaked>>
        ELSE DeleteTsfns    \* the tsfn is live, so Release() is safe
-    /\ UNCHANGED <<locked, tsfnOf, alive, mpc, mine, result, sessions, changes>>
+    /\ UNCHANGED <<locked, tsfnOf, alive, mpc, mine, result, sessions, changes, dying>>
 
 -----------------------------------------------------------------------------
 (* The monitor thread: MonitorLoop. It holds mutex_ only in "attach" and   *)
 (* "report", which is where it calls BlockingCall under the lock.          *)
 
 monitorOnly == <<running, tsfnOf, tsfnActive, alive, mine, sessions, active,
-                 tsfn, jpc, torn>>
+                 tsfn, jpc, dying, torn, leaked>>
 
 \* UpdateReaderList(), then reader-attached for each reader, under mutex_
 MonInit ==
@@ -500,19 +539,20 @@ Next ==
     \/ JsStart \/ JsStop \/ StopCancel \/ StopJoin
     \/ JsDestroy \/ DtorCancel \/ DtorJoin \/ DtorEnd
     \/ \E s \in Sessions : Dispatch(s) \/ Finalize(s)
-    \/ Teardown \/ HookStart \/ HookCancel \/ HookJoin
+    \/ TeardownBegin \/ Teardown \/ HookStart \/ HookCancel \/ HookJoin
     \/ MonInit \/ MonAttach \/ MonTop \/ MonBuild \/ MonWoken \/ MonProcess
     \/ MonRefresh \/ MonReport \/ MonError \/ MonRecover \/ MonExit
     \/ PcscChange \/ PcscError \/ PcscTimeout
     \/ Done
 
-\* Threads that can run do run, timeouts fire, and the event loop runs.
-\* Nothing forces JS to call start/stop, GC to collect, Node to tear down,
-\* or PC/SC to report.
+\* Threads that can run do run, timeouts fire, the event loop runs, and a
+\* teardown that has begun completes. Nothing forces JS to call start/stop,
+\* GC to collect, Node to begin a teardown, or PC/SC to report.
 Fairness ==
     /\ WF_vars(StopCancel) /\ WF_vars(StopJoin)
     /\ WF_vars(DtorCancel) /\ WF_vars(DtorJoin) /\ WF_vars(DtorEnd)
-    /\ WF_vars(HookStart) /\ WF_vars(HookCancel) /\ WF_vars(HookJoin)
+    /\ WF_vars(Teardown) /\ WF_vars(HookStart) /\ WF_vars(HookCancel)
+    /\ WF_vars(HookJoin)
     /\ \A s \in Sessions : WF_vars(Dispatch(s)) /\ WF_vars(Finalize(s))
     /\ WF_vars(MonInit) /\ WF_vars(MonAttach) /\ WF_vars(MonTop)
     /\ WF_vars(MonBuild) /\ WF_vars(MonWoken) /\ WF_vars(MonProcess)
@@ -527,6 +567,9 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 
 \* Nothing fatal ever happens: no std::terminate, no use-after-free
 NoCrash == crash = "none"
+
+\* Every event is freed, delivered or not
+EventsFreed == ~leaked
 
 \* A running monitor thread belongs to the newest session, and tsfn_ (which
 \* MonitorLoop reads as a member, not a copy) is that session's tsfn

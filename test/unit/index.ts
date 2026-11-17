@@ -2755,30 +2755,53 @@ describe('Service outage recovery', () => {
 const addonPath = resolve(__dirname, '../../../build/Release/smartcard_napi.node');
 const NO_SERVICE_CODES = [0x8010001d, 0x8010001e];
 
-describe('Worker teardown with a running monitor (spec finding 4)', () => {
+describe('Worker teardown with native work outstanding', () => {
+    // A worker ends - exits, or is terminated - while the addon still has
+    // something to deliver into it. Each case killed the whole process, so
+    // they run in a child process:
+    // - running: a monitor started and never stopped (spec finding 4: Node
+    //   deleted the monitor's tsfn, then the destructor released it)
+    // - queued: the monitor's first events still undelivered, because the
+    //   worker blocks its event loop
+    // - waiting: a waitForChange() still in flight
+    // The last two crashed in the delivery: the call into the dying
+    // environment failed, and node-addon-api rethrew that into Node
+    // (std::terminate). They need a reader, to have something to deliver.
+    type Pending = 'running' | 'queued' | 'waiting';
+    type Ending = 'exit' | 'terminate';
 
-    // A worker starts a ReaderMonitor and exits, or is terminated, without
-    // calling stop(). It runs in a child process because the bug killed the
-    // whole process (SIGABRT): Node deleted the monitor's tsfn at teardown,
-    // then the destructor released it.
-    function runWorker(ending: 'exit' | 'terminate') {
+    function runWorker(pending: Pending, ending: Ending) {
         const workerSource = `
             const { parentPort } = require('node:worker_threads');
             const addon = require(${JSON.stringify(addonPath)});
-            const monitor = new addon.ReaderMonitor();
-            let started = false;
+            const pending = ${JSON.stringify(pending)};
+            const ending = ${JSON.stringify(ending)};
+            let readers = [];
+            let context;
             try {
-                monitor.start(() => {});
-                started = true;
+                context = new addon.Context();
+                readers = context.listReaders();
+                if (pending === 'waiting') {
+                    context.waitForChange(readers, 1000).then(() => {}, () => {});
+                } else {
+                    new addon.ReaderMonitor().start(() => {});
+                }
             } catch (err) {
                 const noService = ${JSON.stringify(NO_SERVICE_CODES)}.includes(err.code);
                 parentPort.postMessage(
                     (noService ? 'unavailable: ' : 'start failed: ') + err.message
                 );
+                context = undefined;
             }
-            if (started) {
-                parentPort.postMessage('started');
-                if (${JSON.stringify(ending)} === 'exit') {
+            if (context !== undefined) {
+                parentPort.postMessage(readers.length > 0 ? 'started' : 'started, no readers');
+                if (pending === 'queued') {
+                    // Never let the event loop deliver the monitor's events:
+                    // exit after a while, or block until terminated
+                    const flag = new Int32Array(new SharedArrayBuffer(4));
+                    Atomics.wait(flag, 0, 0, ending === 'exit' ? 300 : undefined);
+                    process.exit(0);
+                } else if (ending === 'exit') {
                     setTimeout(() => process.exit(0), 100);
                 }
             }
@@ -2788,7 +2811,7 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
             const worker = new Worker(${JSON.stringify(workerSource)}, { eval: true });
             worker.on('message', (message) => {
                 console.log(message);
-                if (message === 'started' && ${JSON.stringify(ending)} === 'terminate') {
+                if (message.startsWith('started') && ${JSON.stringify(ending)} === 'terminate') {
                     setTimeout(() => worker.terminate(), 100);
                 }
             });
@@ -2799,18 +2822,29 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
         });
     }
 
-    for (const ending of ['exit', 'terminate'] as const) {
-        it(`does not crash when the worker ends with "${ending}"`, (t) => {
-            const result = runWorker(ending);
-            if (result.stdout.includes('unavailable: ')) {
-                t.skip(`no PC/SC service: ${result.stdout.trim()}`);
-                return;
-            }
-            const output = `${result.stdout}\n${result.stderr}`;
-            assert.match(result.stdout, /started/, output);
-            assert.strictEqual(result.signal, null, output);
-            assert.strictEqual(result.status, 0, output);
-        });
+    const titles: Record<Pending, string> = {
+        running: 'its monitor still running',
+        queued: 'monitor events not yet delivered',
+        waiting: 'waitForChange() in flight',
+    };
+    for (const pending of ['running', 'queued', 'waiting'] as const) {
+        for (const ending of ['exit', 'terminate'] as const) {
+            it(`does not crash when the worker ends with "${ending}" with ${titles[pending]}`, (t) => {
+                const result = runWorker(pending, ending);
+                if (result.stdout.includes('unavailable: ')) {
+                    t.skip(`no PC/SC service: ${result.stdout.trim()}`);
+                    return;
+                }
+                if (pending !== 'running' && result.stdout.includes('no readers')) {
+                    t.skip('no reader, so nothing to deliver');
+                    return;
+                }
+                const output = `${result.stdout}\n${result.stderr}`;
+                assert.match(result.stdout, /started/, output);
+                assert.strictEqual(result.signal, null, output);
+                assert.strictEqual(result.status, 0, output);
+            });
+        }
     }
 });
 

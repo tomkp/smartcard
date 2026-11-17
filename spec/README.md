@@ -67,6 +67,8 @@ Two ideas have no counterpart in Z:
 | `Lifecycle-teardown` | Node tears down the environment while the monitor runs | No errors |
 | `Lifecycle-v3.8-teardown` | 3.8.0: the same | Use-after-free (finding 4) |
 | `Lifecycle-hookorder` | What if `start()` added its teardown hook before creating the tsfn? | Use-after-free |
+| `Lifecycle-pre157-delivery` | Teardown with events still queued, delivered as before #157 | `std::terminate` (finding 5) |
+| `Lifecycle-pre157-leak` | The same: the events Node drains | Leaked (finding 5) |
 | `Events-current` | The current monitor, with pcsc-lite 2.3.0 or later: every event makes sense, JS learns every reader and card, and the loop keeps waiting (3 readers, 6 world steps) | No errors |
 | `Events-oldpcsc` | The same with pcsc-lite before 2.3.0, which doesn't count reader events | No errors |
 | `Events-nopoll` | What if the monitor relied on pcsc-lite's reader event count instead of re-listing the readers? | Violated: a reader plugged in before the first wait is never announced |
@@ -84,9 +86,9 @@ in under a second. The current code passes the same checks.
 
 ## Findings
 
-All four findings were in the monitor up to 3.8.0 and are fixed (see Fixes
-below); their configs keep them as regression checks against
-`Design = "v3.8"`.
+All five findings were in the monitor up to 3.8.0 and are fixed (see Fixes
+below); their configs keep them as regression checks, against
+`Design = "v3.8"` (findings 1–4) or `SafeDelivery = FALSE` (finding 5).
 
 Findings 1–3 all come from the same window: the time between one
 `SCardGetStatusChange` returning and the next one starting. That covers
@@ -190,6 +192,28 @@ Node version:
   [#65967](https://github.com/nodejs/node/pull/65967) but not yet released
   in 24.x.
 
+### 5. Teardown with events still queued: std::terminate, and a leak
+
+This one was found by testing, after the fix for finding 4, and the model
+missed it because it assumed Node dispatches nothing once teardown begins.
+It does: as the environment starts to tear down, after JS can no longer
+run, Node runs the event loop once more, and the monitor's queued events
+are dispatched into it.
+
+The trigger is a worker that ends while its monitor still has events
+queued, e.g. its event loop was busy when the monitor emitted
+`reader-attached`. Delivering one called into JS, which failed;
+`callback.Call()` turned that into a C++ exception, and node-addon-api,
+unable to throw it into JS, threw a new one into Node: `std::terminate`,
+on Node 20, 22 and 24. Events Node drained without an environment at all
+were never freed: node-addon-api's `ThreadSafeFunction` returns without
+deleting them. The async operations (`waitForChange()` and the rest) had
+the same crash when a worker ended with one in flight.
+
+`Lifecycle-pre157-delivery` and `Lifecycle-pre157-leak` show both, with
+`SafeDelivery = FALSE`. The model now has a `dying` phase (JS can't run,
+the loop runs once more) before the cleanup hooks.
+
 ### Details that look incidental but that correctness depends on
 
 - **The unlimited queue** (`0` at [`reader_monitor.cpp:121`](https://github.com/tomkp/smartcard/blob/f3d782eb1a57603ae1934dc90dba2feeb9715281/src/reader_monitor.cpp#L121)). The monitor calls
@@ -244,7 +268,17 @@ fix 4.
    (`TeardownReturns`); with the join taken out of the hook, TLC finds the
    use-after-free again. A worker that exits or is terminated with its
    monitor running now exits cleanly on Node 20, 22 and 24, under ASan
-   too. The fix doesn't rely on how any Node version destroys a tsfn.
+   too (and, since fix 5, with events still queued). The fix doesn't rely
+   on how any Node version destroys a tsfn.
+5. **Delivery during teardown** (#157). The monitor's tsfn is a
+   `TypedThreadSafeFunction` whose delivery function owns each event: it
+   frees it when Node drains the queue with no environment, and calls the
+   callback through `napi_call_function`, so a call the dying environment
+   refuses is dropped rather than turned into a C++ exception. The build
+   defines `NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS`, so node-addon-api no
+   longer rethrows into Node when a callback can't throw into JS; that
+   covers the async operations too. `Lifecycle-teardown` checks
+   `SafeDelivery` with `EventsFreed`.
 
 What is still not covered:
 
