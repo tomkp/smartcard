@@ -2761,7 +2761,10 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
     // calling stop(). It runs in a child process because the bug killed the
     // whole process (SIGABRT): Node deleted the monitor's tsfn at teardown,
     // then the destructor released it.
-    function runWorker(ending: 'exit' | 'terminate') {
+    // blocked: the worker blocks its event loop after start(), so the
+    // monitor's first events (reader-attached, when there are readers) are
+    // still queued, undelivered, when the worker ends
+    function runWorker(ending: 'exit' | 'terminate', blocked = false) {
         const workerSource = `
             const { parentPort } = require('node:worker_threads');
             const addon = require(${JSON.stringify(addonPath)});
@@ -2778,7 +2781,10 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
             }
             if (started) {
                 parentPort.postMessage('started');
-                if (${JSON.stringify(ending)} === 'exit') {
+                if (${JSON.stringify(blocked)}) {
+                    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+                    if (${JSON.stringify(ending)} === 'exit') process.exit(0);
+                } else if (${JSON.stringify(ending)} === 'exit') {
                     setTimeout(() => process.exit(0), 100);
                 }
             }
@@ -2796,6 +2802,24 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
         return spawnSync(process.execPath, ['-e', mainSource], {
             encoding: 'utf-8',
             timeout: 30000,
+        });
+    }
+
+    // Undelivered events used to kill the process at teardown: delivering
+    // one into the dying environment failed, and the C++ exception that
+    // made escaped into Node (std::terminate); those Node drained unsent
+    // leaked.
+    for (const ending of ['exit', 'terminate'] as const) {
+        it(`does not crash when the worker ends with "${ending}" before its events are delivered`, (t) => {
+            const result = runWorker(ending, true);
+            if (result.stdout.includes('unavailable: ')) {
+                t.skip(`no PC/SC service: ${result.stdout.trim()}`);
+                return;
+            }
+            const output = `${result.stdout}\n${result.stderr}`;
+            assert.match(result.stdout, /started/, output);
+            assert.strictEqual(result.signal, null, output);
+            assert.strictEqual(result.status, 0, output);
         });
     }
 

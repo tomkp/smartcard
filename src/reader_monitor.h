@@ -9,8 +9,20 @@
 #include <mutex>
 #include <condition_variable>
 #include <unordered_map>
+#include <cstddef>
 #include "platform/pcsc.h"
 #include "reader_state_utils.h"
+
+// One event on its way from the monitor thread to the JS callback
+struct EventData;
+
+// Called by Node for every queued event: delivers it to the JS callback,
+// then frees it. Node also calls it with no env to drain the queue when
+// the environment is torn down first, so the event is freed either way.
+void DeliverMonitorEvent(Napi::Env env, Napi::Function callback,
+                         std::nullptr_t* context, EventData* data);
+using MonitorEventTsfn =
+    Napi::TypedThreadSafeFunction<std::nullptr_t, EventData, DeliverMonitorEvent>;
 
 /**
  * ReaderMonitor - Native PC/SC event monitoring using ThreadSafeFunction
@@ -40,7 +52,7 @@ private:
 
     // Thread-safe function for emitting events. tsfnActive_ tracks whether
     // tsfn_ holds a live handle that still needs Release().
-    Napi::ThreadSafeFunction tsfn_;
+    MonitorEventTsfn tsfn_;
     bool tsfnActive_;
 
     // Shutdown() wakes the monitor thread from the pause between retries
