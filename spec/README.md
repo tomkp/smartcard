@@ -4,7 +4,7 @@ Two TLA+ specifications of the native `ReaderMonitor`
 ([`src/reader_monitor.cpp`](../src/reader_monitor.cpp)), model-checked with
 TLC. `Design = "current"` models the monitor as it is now. `Design = "v3.8"`
 models it as released in smartcard 3.8.0 (`master` at `f3d782e`), where the
-specs found findings 1–3; the line links below point at that commit. When the
+specs found findings 1–4; the line links below point at that commit. When the
 monitor changes, the specs should change in the same PR.
 
 | Spec | Question |
@@ -63,7 +63,8 @@ Two ideas have no counterpart in Z:
 | `Lifecycle-pre139-restart` | The same code, with JS restarting the monitor | `std::terminate`: a stale finalizer stops the new session |
 | `Lifecycle-boundedq` | What if the tsfn queue were bounded? | Deadlock |
 | `Lifecycle-notimeout` | What if the wait had no timeout? | `stop()` can hang forever |
-| `Lifecycle-teardown` | Node tears down the environment while the monitor runs | Use-after-free |
+| `Lifecycle-teardown` | Node tears down the environment while the monitor runs | No errors |
+| `Lifecycle-v3.8-teardown` | 3.8.0: the same | Use-after-free (finding 4) |
 | `Events-current` | The current monitor: every event makes sense, JS learns every reader and card, and the loop keeps waiting (3 readers, 6 world steps) | No errors |
 | `Events-replug` | The same, counting a reader replugged between waits | Violated: the one gap left (see Fixes) |
 | `Events-v3.8-swap` | 3.8.0: JS learns which card is in the reader | Violated (finding 1) |
@@ -77,9 +78,9 @@ in under a second. The current code passes the same checks.
 
 ## Findings
 
-Findings 1–3 were in the monitor up to 3.8.0 and are fixed (see Fixes below);
-their configs keep them as regression checks against `Design = "v3.8"`.
-Finding 4 is open.
+All four findings were in the monitor up to 3.8.0 and are fixed (see Fixes
+below); their configs keep them as regression checks against
+`Design = "v3.8"`.
 
 Findings 1–3 all come from the same window: the time between one
 `SCardGetStatusChange` returning and the next one starting. That covers
@@ -149,7 +150,7 @@ as UNKNOWN and the PnP entry fires.
 
 ### 4. Node tearing down the environment while the monitor runs: use-after-free
 
-This is `Lifecycle-teardown`. JS calls `start()`, then Node tears down the
+This is `Lifecycle-v3.8-teardown`. JS calls `start()`, then Node tears down the
 environment before the monitor thread has emitted its first
 `reader-attached`. The thread then calls `BlockingCall` on a tsfn that Node
 has already deleted. If the destructor runs after that, its
@@ -164,10 +165,23 @@ and just after the wait, so a thread that has already passed those checks
 still pushes.
 
 In practice the trigger is a `worker_thread` that uses smartcard and exits,
-or is terminated, without calling `stop()`. The Node mechanism above is read
-from source. The claim that the tsfn hook runs before the ReaderMonitor's
-finalizer is my reading of env cleanup and has not been reproduced. A
-worker-termination test under ASan would settle it.
+or is terminated, without calling `stop()`. How it fails depends on the
+Node version:
+
+- **Node 20 and 22** behave as described above, which is what the model
+  follows. The destructor runs from inside the tsfn's own destructor (it
+  drops the last reference to the Node-API environment), so `Release()`
+  reaches an object that is being destroyed and survives by luck. The
+  thread-side push stays a race; TLC's shortest trace takes it.
+- **Node 24.15 and later** keep a tsfn alive while a thread still holds it,
+  but run the environment's finalizers while holding the tsfn's own mutex.
+  `~ReaderMonitor`'s `Release()` locks that mutex again, and the process
+  aborts in `uv_mutex_lock`. That happens every time: SIGABRT on macOS
+  with Node 24.22 and a release build. It is
+  [nodejs/node#65100](https://github.com/nodejs/node/issues/65100), fixed
+  on Node's main branch by
+  [#65967](https://github.com/nodejs/node/pull/65967) but not yet released
+  in 24.x.
 
 ### Details that look incidental but that correctness depends on
 
@@ -184,10 +198,11 @@ worker-termination test under ASan would settle it.
   would wait forever (`Lifecycle-notimeout`). So `stop()` can block the JS
   thread for up to about 1 s, by design.
 
-## Fixes for findings 1–3
+## Fixes
 
-`Events-current` passes every event property with 3 readers and 6 world
-steps. The code now does this:
+The code now does the following. `Events-current` passes every event
+property with 3 readers and 6 world steps, and `Lifecycle-teardown` covers
+fix 4.
 
 1. **Swaps.** `DetectCardStateChange` (`src/reader_state_utils.h`) returns
    `Replaced` when a card is present at both readings and pcsc-lite's event
@@ -207,6 +222,18 @@ steps. The code now does this:
    sleep. If the very next wait fails the same way, it falls back to the
    error path (one `error` a second, still re-listing), so a lasting failure
    can't spin.
+4. **Teardown.** `start()` adds an environment cleanup hook
+   (`napi_add_env_cleanup_hook`) straight after creating the tsfn. Node runs
+   cleanup hooks newest first
+   ([`src/cleanup_queue.cc`](https://github.com/nodejs/node/blob/v24.x/src/cleanup_queue.cc)),
+   so at teardown this hook runs before the tsfn's own. It stops the monitor
+   as `stop()` does (cancel, join, release), and only then does Node delete
+   the tsfn. `stop()` and the destructor remove the hook.
+   `Lifecycle-teardown` checks this design, including that the hook returns
+   (`TeardownReturns`); with the join taken out of the hook, TLC finds the
+   use-after-free again. A worker that exits or is terminated with its
+   monitor running now exits cleanly on Node 20, 22 and 24, under ASan
+   too. The fix doesn't rely on how any Node version destroys a tsfn.
 
 What is still not covered:
 
@@ -229,10 +256,9 @@ feeding the PnP entry's previous `dwEventState` back as its `dwCurrentState`
 would catch reader changes between calls directly, but only on that
 platform.
 
-There is no fix yet for finding 4. One option is an env cleanup hook
-registered after the tsfn, which runs first because hooks run in reverse
-order, that stops and joins the monitor before Node deletes the tsfn. That
-needs checking against Node's behaviour.
+Like `stop()`, the teardown hook can wait up to the 1 s timeout for the
+monitor thread, so a worker with a running monitor can take that long to
+exit.
 
 ## What the model leaves out
 

@@ -44,6 +44,9 @@ private:
     Napi::ThreadSafeFunction tsfn_;
     bool tsfnActive_;
 
+    // OnEnvCleanup is registered with Node from start() until Shutdown()
+    bool cleanupHookAdded_;
+
     // Current known reader states (Issue #111: keyed by reader name for reliable lookup)
     struct ReaderInfo {
         DWORD lastState;
@@ -59,6 +62,8 @@ private:
     Napi::Value GetIsRunning(const Napi::CallbackInfo& info);
 
     // Internal methods
+    void Shutdown();
+    static void OnEnvCleanup(void* arg);
     void MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive);
     void UpdateReaderList();
     void ResyncReaderList();
