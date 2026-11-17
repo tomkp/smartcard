@@ -25,6 +25,8 @@ CONSTANTS
     Design,        \* "current"; "v3.8": as released in 3.8.0, without the env
                    \*   cleanup hook; "pre139": the code before PR #139
     WithTeardown,  \* Node may tear the environment down (e.g. a worker exits)
+    HookRunsFirst, \* at teardown the monitor's cleanup hook runs before the
+                   \*   tsfn's (start() adds it after creating the tsfn)
     WithGC         \* GC may collect the ReaderMonitor (run its destructor)
 
 ASSUME /\ MaxSessions \in Nat \ {0}
@@ -33,6 +35,7 @@ ASSUME /\ MaxSessions \in Nat \ {0}
        /\ HasTimeout \in BOOLEAN
        /\ Design \in {"current", "v3.8", "pre139"}
        /\ WithTeardown \in BOOLEAN
+       /\ HookRunsFirst \in BOOLEAN
        /\ WithGC \in BOOLEAN
 
 Sessions == 1..MaxSessions
@@ -70,7 +73,7 @@ vars == <<running, locked, tsfnOf, tsfnActive, thread, alive, mpc, mine,
 MonitorPCs == {"none", "init", "attach", "top", "build", "waiting", "woken",
                "process", "refresh", "report", "error", "recover", "exit"}
 JsPCs == {"idle", "stopping", "joining", "dtorCancel", "dtorJoin", "dtorEnd",
-          "hookCancel", "hookJoin", "dead"}
+          "hookStart", "hookCancel", "hookJoin", "dead"}
 TsfnStates == {"unused", "live", "released", "deleted"}
 
 TypeOK ==
@@ -211,10 +214,10 @@ StopJoin ==
     /\ UNCHANGED <<running, locked, tsfnOf, alive, mpc, mine, result,
                    sessions, active, queue, changes, torn>>
 
-\* ~ReaderMonitor, run by GC - or by Node during teardown, so it is still
-\* allowed after torn
+\* ~ReaderMonitor, run by GC - or by Node, which finalizes every ObjectWrap
+\* at teardown
 JsDestroy ==
-    /\ WithGC
+    /\ WithGC \/ torn
     /\ jpc = "idle" /\ alive
     /\ IF running
        THEN running' = FALSE /\ jpc' = "dtorCancel"
@@ -297,10 +300,10 @@ DeleteTsfns ==
     /\ queue' = [s \in Sessions |-> IF s \in doomed THEN 0 ELSE queue[s]]
     /\ Finalizers(doomed)
 
-\* The current design's own hook, OnEnvCleanup, is added in start() after the
-\* tsfn's, so it runs first. It is registered from start() until stop() or
-\* the destructor, which is while tsfnActive (teardown never starts with JS
-\* inside either).
+\* The current design's own hook, OnEnvCleanup, is registered from start()
+\* until stop() or the destructor, which is while tsfnActive (teardown never
+\* starts with JS inside either). It runs before the tsfn's hook if
+\* HookRunsFirst.
 HookAdded == Design = "current" /\ tsfnActive
 
 Teardown ==
@@ -308,15 +311,23 @@ Teardown ==
     /\ ~torn
     /\ jpc \in {"idle", "dead"}
     /\ IF HookAdded
-       THEN \* OnEnvCleanup -> Shutdown(), which stops the monitor as stop() does
-            /\ running' = FALSE
-            /\ jpc' = "hookCancel"
-            /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine,
-                           result, sessions, active, queue, tsfn, changes, torn,
-                           crash>>
+       THEN /\ jpc' = "hookStart"
+            /\ IF HookRunsFirst
+               THEN UNCHANGED <<running, active, queue, tsfn, torn, crash>>
+               ELSE DeleteTsfns
        ELSE /\ DeleteTsfns
-            /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine,
-                           result, sessions, jpc, changes>>
+            /\ UNCHANGED jpc
+    /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine, result,
+                   sessions, changes>>
+
+\* OnEnvCleanup -> Shutdown(): running_ = false, then cancel and join as
+\* stop() does
+HookStart ==
+    /\ jpc = "hookStart"
+    /\ running' = FALSE
+    /\ jpc' = "hookCancel"
+    /\ UNCHANGED <<locked, tsfnOf, tsfnActive, thread, alive, mpc, mine, result,
+                   sessions, active, queue, tsfn, changes, torn, crash>>
 
 HookCancel ==
     /\ jpc = "hookCancel"
@@ -326,15 +337,18 @@ HookCancel ==
     /\ UNCHANGED <<running, locked, tsfnOf, tsfnActive, thread, alive, mine,
                    sessions, active, queue, tsfn, changes, torn, crash>>
 
-\* join(), then Release() on a tsfn that is still live; then the tsfn's own
-\* hook deletes it
+\* join(), then Release(); then, if it hasn't run yet, the tsfn's own hook
 HookJoin ==
     /\ jpc = "hookJoin"
     /\ thread # "running"
     /\ thread' = "none"
     /\ tsfnActive' = FALSE
     /\ jpc' = "idle"
-    /\ DeleteTsfns
+    /\ IF torn
+       THEN /\ tsfn' = Released
+            /\ crash' = ReleaseCrash
+            /\ UNCHANGED <<running, active, queue, torn>>
+       ELSE DeleteTsfns    \* the tsfn is live, so Release() is safe
     /\ UNCHANGED <<locked, tsfnOf, alive, mpc, mine, result, sessions, changes>>
 
 -----------------------------------------------------------------------------
@@ -474,7 +488,7 @@ Next ==
     \/ JsStart \/ JsStop \/ StopCancel \/ StopJoin
     \/ JsDestroy \/ DtorCancel \/ DtorJoin \/ DtorEnd
     \/ \E s \in Sessions : Dispatch(s) \/ Finalize(s)
-    \/ Teardown \/ HookCancel \/ HookJoin
+    \/ Teardown \/ HookStart \/ HookCancel \/ HookJoin
     \/ MonInit \/ MonAttach \/ MonTop \/ MonBuild \/ MonWoken \/ MonProcess
     \/ MonRefresh \/ MonReport \/ MonError \/ MonRecover \/ MonExit
     \/ PcscChange \/ PcscError \/ PcscTimeout
@@ -486,7 +500,7 @@ Next ==
 Fairness ==
     /\ WF_vars(StopCancel) /\ WF_vars(StopJoin)
     /\ WF_vars(DtorCancel) /\ WF_vars(DtorJoin) /\ WF_vars(DtorEnd)
-    /\ WF_vars(HookCancel) /\ WF_vars(HookJoin)
+    /\ WF_vars(HookStart) /\ WF_vars(HookCancel) /\ WF_vars(HookJoin)
     /\ \A s \in Sessions : WF_vars(Dispatch(s)) /\ WF_vars(Finalize(s))
     /\ WF_vars(MonInit) /\ WF_vars(MonAttach) /\ WF_vars(MonTop)
     /\ WF_vars(MonBuild) /\ WF_vars(MonWoken) /\ WF_vars(MonProcess)
@@ -509,7 +523,7 @@ OneSession == thread = "running" => mine = sessions /\ tsfnOf = mine
 \* stop(), the destructor and the teardown hook always return
 StopReturns == (jpc = "stopping") ~> (jpc = "idle")
 DestroyReturns == (jpc \in {"dtorCancel", "dtorJoin", "dtorEnd"}) ~> (jpc = "dead")
-TeardownReturns == (jpc \in {"hookCancel", "hookJoin"}) ~> torn
+TeardownReturns == (jpc \in {"hookStart", "hookCancel", "hookJoin"}) ~> (jpc = "idle")
 
 \* Once the ReaderMonitor is gone every tsfn is finalized, so nothing keeps
 \* the event loop (and the process) alive

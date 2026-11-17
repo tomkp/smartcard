@@ -104,12 +104,14 @@ void ReaderMonitor::Shutdown() {
 }
 
 // Node is tearing the environment down (a worker exiting or terminated)
-// with the monitor still running. Node then deletes the tsfn whatever its
-// thread count, and only after that finalizes this object - so without
-// this hook the monitor thread could push to the deleted tsfn, and the
-// destructor's Release() touches it (spec/README.md, finding 4). Node runs
-// cleanup hooks newest first, and start() adds this one after the tsfn
-// has added its own, so it stops the monitor while the tsfn still exists.
+// with the monitor still running. The tsfn's own cleanup hook would close
+// it first and finalize this object only afterwards, so the destructor's
+// Release() would reach a tsfn Node has finished with: on Node 24.15+ it
+// locks the tsfn's mutex again (SIGABRT, or a hang on Linux); on Node
+// 20/22 it touches a tsfn being deleted, and the monitor thread may still
+// push to it (spec/README.md, finding 4). Node runs cleanup hooks newest
+// first, and start() adds this one after the tsfn has added its own, so
+// it stops the monitor while the tsfn is still alive.
 void ReaderMonitor::OnEnvCleanup(void* arg) {
     auto* self = static_cast<ReaderMonitor*>(arg);
     // Node drops the hook itself once it has run
@@ -163,8 +165,8 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
     tsfnActive_ = true;
 
     // Added after the tsfn, so that at environment teardown it runs first
-    napi_add_env_cleanup_hook(env, OnEnvCleanup, this);
-    cleanupHookAdded_ = true;
+    cleanupHookAdded_ =
+        napi_add_env_cleanup_hook(env, OnEnvCleanup, this) == napi_ok;
 
     // Start monitoring
     running_ = true;

@@ -65,6 +65,7 @@ Two ideas have no counterpart in Z:
 | `Lifecycle-notimeout` | What if the wait had no timeout? | `stop()` can hang forever |
 | `Lifecycle-teardown` | Node tears down the environment while the monitor runs | No errors |
 | `Lifecycle-v3.8-teardown` | 3.8.0: the same | Use-after-free (finding 4) |
+| `Lifecycle-hookorder` | What if `start()` added its teardown hook before creating the tsfn? | Use-after-free |
 | `Events-current` | The current monitor: every event makes sense, JS learns every reader and card, and the loop keeps waiting (3 readers, 6 world steps) | No errors |
 | `Events-replug` | The same, counting a reader replugged between waits | Violated: the one gap left (see Fixes) |
 | `Events-v3.8-swap` | 3.8.0: JS learns which card is in the reader | Violated (finding 1) |
@@ -198,6 +199,10 @@ Node version:
   cancel does nothing and `join()` waits for the timeout. With `INFINITE` it
   would wait forever (`Lifecycle-notimeout`). So `stop()` can block the JS
   thread for up to about 1 s, by design.
+- **The order of the teardown hook** (fix 4). `start()` adds its env
+  cleanup hook *after* creating the tsfn. Node runs cleanup hooks newest
+  first, so the monitor stops while the tsfn is alive. Added before, the
+  tsfn's hook runs first and the crash comes back (`Lifecycle-hookorder`).
 
 ## Fixes
 
@@ -257,9 +262,10 @@ feeding the PnP entry's previous `dwEventState` back as its `dwCurrentState`
 would catch reader changes between calls directly, but only on that
 platform.
 
-Like `stop()`, the teardown hook can wait up to the 1 s timeout for the
-monitor thread, so a worker with a running monitor can take that long to
-exit.
+Like `stop()`, the teardown hook waits for the monitor thread: normally
+up to the 1 s wait timeout, and longer if the monitor is in its error path
+(a 1 s sleep that `SCardCancel` can't cut short). So a worker with a
+running monitor can take a second or more to exit.
 
 ## What the model leaves out
 

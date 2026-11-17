@@ -2710,7 +2710,12 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
                 monitor.start(() => {});
                 started = true;
             } catch (err) {
-                parentPort.postMessage('unavailable: ' + err.message);
+                // Skip only when there is no PC/SC service to monitor
+                // (SCARD_E_NO_SERVICE, SCARD_E_SERVICE_STOPPED)
+                const noService = [0x8010001d, 0x8010001e].includes(err.code);
+                parentPort.postMessage(
+                    (noService ? 'unavailable: ' : 'start failed: ') + err.message
+                );
             }
             if (started) {
                 parentPort.postMessage('started');
@@ -2738,7 +2743,7 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
     for (const ending of ['exit', 'terminate'] as const) {
         it(`does not crash when the worker ends with "${ending}"`, (t) => {
             const result = runWorker(ending);
-            if (result.stdout.includes('unavailable')) {
+            if (result.stdout.includes('unavailable: ')) {
                 t.skip(`no PC/SC service: ${result.stdout.trim()}`);
                 return;
             }
