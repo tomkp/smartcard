@@ -37,5 +37,15 @@
     #define MAX_ATR_SIZE 33
 #endif
 
+// pcsc-lite keeps a per-reader card insertion/removal counter in the upper
+// 16 bits of dwEventState. Windows and macOS don't document that word for
+// reader entries (Windows uses it for the reader count on the PnP entry),
+// so it is only relied on with pcsc-lite.
+#if defined(_WIN32) || defined(__APPLE__)
+    #define SMARTCARD_PCSC_COUNTS_CARD_EVENTS false
+#else
+    #define SMARTCARD_PCSC_COUNTS_CARD_EVENTS true
+#endif
+
 // Helper macro for unused parameters
 #define PCSC_UNUSED(x) (void)(x)

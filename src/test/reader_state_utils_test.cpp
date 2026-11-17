@@ -53,3 +53,49 @@ TEST_CASE("DetectCardStateChange", "[state]") {
         REQUIRE(DetectCardStateChange(HIGH_BIT, 0x00, HIGH_BIT) == CardEvent::Removed);
     }
 }
+
+TEST_CASE("DetectCardStateChange with a card event counter", "[state]") {
+    // pcsc-lite's counter lives in bits 16-31 and counts insertions and
+    // removals; build states with a given count
+    auto withCount = [](uint64_t state, uint64_t count) { return state | (count << 16); };
+
+    SECTION("returns Replaced when the count moved with a card present throughout") {
+        REQUIRE(DetectCardStateChange(withCount(PRESENT, 1), withCount(PRESENT, 3), PRESENT, true)
+                == CardEvent::Replaced);
+    }
+
+    SECTION("returns None for the same move when the platform doesn't count") {
+        REQUIRE(DetectCardStateChange(withCount(PRESENT, 1), withCount(PRESENT, 3), PRESENT, false)
+                == CardEvent::None);
+    }
+
+    SECTION("returns None when the count is unchanged") {
+        REQUIRE(DetectCardStateChange(withCount(PRESENT, 3), withCount(PRESENT, 3), PRESENT, true)
+                == CardEvent::None);
+    }
+
+    SECTION("returns None when a card came and went with none present at either read") {
+        REQUIRE(DetectCardStateChange(withCount(0, 2), withCount(0, 4), PRESENT, true)
+                == CardEvent::None);
+    }
+
+    SECTION("insertion and removal still win over the count") {
+        REQUIRE(DetectCardStateChange(withCount(0, 2), withCount(PRESENT, 5), PRESENT, true)
+                == CardEvent::Inserted);
+        REQUIRE(DetectCardStateChange(withCount(PRESENT, 1), withCount(0, 4), PRESENT, true)
+                == CardEvent::Removed);
+    }
+
+    SECTION("a counter that wrapped still counts as moved") {
+        REQUIRE(DetectCardStateChange(withCount(PRESENT, 0xFFFF), withCount(PRESENT, 1), PRESENT, true)
+                == CardEvent::Replaced);
+    }
+
+    SECTION("only bits 16-31 are the counter") {
+        // Other state flags, or bits above 32 on 64-bit DWORDs, are not counts
+        REQUIRE(DetectCardStateChange(withCount(PRESENT, 1), withCount(PRESENT | 0x100, 1), PRESENT, true)
+                == CardEvent::None);
+        REQUIRE(DetectCardStateChange(withCount(PRESENT, 1), withCount(PRESENT, 1) | (1ULL << 40), PRESENT, true)
+                == CardEvent::None);
+    }
+}

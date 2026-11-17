@@ -20,15 +20,19 @@
 (* Granularity: a wait that returns is processed in the same atomic step,  *)
 (* so the world can only move between waits - while the monitor is busy    *)
 (* emitting, or looping back to the next call - and while it is blocked.   *)
+(*                                                                         *)
+(* Design "current" is the monitor on master. "v3.8" is the monitor as     *)
+(* released in smartcard 3.8.0, before the fixes for the lost events these *)
+(* specs found (spec/README.md).                                           *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
     Readers,       \* reader names, e.g. {r1, r2}
     MaxEnvSteps,   \* how many plug/unplug/insert/remove steps the world takes
-    Fixed          \* FALSE: the code as it is. TRUE: with the candidate fixes.
+    Design         \* "current", or "v3.8": the monitor as released in 3.8.0
 
-ASSUME MaxEnvSteps \in Nat /\ Fixed \in BOOLEAN
+ASSUME MaxEnvSteps \in Nat /\ Design \in {"current", "v3.8"}
 
 VARIABLES
     \* the world, as pcscd sees it
@@ -48,12 +52,16 @@ VARIABLES
     \* what the events have told JS
     jsReaders,    \* readers JS has been told are attached
     jsCard,       \* jsCard[r]: the card JS thinks is in r, 0 if none
-    bad           \* an event made no sense (e.g. card-removed with no card)
+    bad,          \* an event made no sense (e.g. card-removed with no card)
+    \* ghost (read only by properties): readers unplugged and plugged back
+    \* while the monitor still tracked them. pcscd restarts their event
+    \* counter, so a card swapped that way can leave no trace.
+    replugged
 
 world == <<plugged, card, count, nextCard, steps>>
 js == <<jsReaders, jsCard, bad>>
 vars == <<plugged, card, count, nextCard, steps, mpc, tracked, last, atr,
-          pnpBase, failed, jsReaders, jsCard, bad>>
+          pnpBase, failed, jsReaders, jsCard, bad, replugged>>
 
 -----------------------------------------------------------------------------
 (* What SCardGetStatusChange reports for a reader: dwEventState without   *)
@@ -120,23 +128,23 @@ Detect(old, new) ==
     ELSE IF old.present /\ ~new.present THEN "removed"
     ELSE "none"
 
-\* Candidate fix: present before and after, but it's a different card, or
+\* CardEvent::Replaced (since 3.8.0): a card present before and after, but
 \* pcscd counted insertions/removals in between
-Swapped(r, old, oldAtr, new) ==
-    /\ Fixed
+Swapped(old, new) ==
+    /\ Design = "current"
     /\ old.present /\ new.present
-    /\ old.count # new.count \/ oldAtr # card[r]
+    /\ old.count # new.count
 
-CardEvents(r, old, oldAtr, new) ==
+CardEvents(r, old, new) ==
     CASE Detect(old, new) = "inserted" -> <<Inserted(r)>>
       [] Detect(old, new) = "removed"  -> <<Removed>>
-      [] Swapped(r, old, oldAtr, new)  -> <<Removed, Inserted(r)>>
+      [] Swapped(old, new)             -> <<Removed, Inserted(r)>>
       [] OTHER                         -> <<>>
 
 \* ApplyCardStateChange(info, readerState) with a fresh reading of r
 ApplyCard(r, s, a) ==
     LET new == Observe(r)
-        evs == CardEvents(r, s, a, new)
+        evs == CardEvents(r, s, new)
         \* commit unless it's an unknown/unusable reading with no event
         commit == evs # <<>> \/ new.kind # "unknown"
     IN [in   |-> TRUE,
@@ -151,7 +159,7 @@ OnChanged(T, L, A) ==
     [r \in Readers |-> IF r \in T /\ Changed(r, L[r]) THEN ApplyCard(r, L[r], A[r])
                        ELSE Keep(T, L, A, r)]
 
-\* After a timeout: RefreshAllReaderStates, an UNAWARE re-read of every
+\* v3.8's timeout path: RefreshAllReaderStates, an UNAWARE re-read of every
 \* tracked reader. If that read fails, it changes nothing.
 RefreshAll(T, L, A) ==
     [r \in Readers |-> IF r \in T /\ ~UnknownReader(T) THEN ApplyCard(r, L[r], A[r])
@@ -168,7 +176,7 @@ Resync(T, L, A) ==
                 [in |-> FALSE, last |-> Unaware, atr |-> 0, evs |-> <<Detached>>]
           [] r \in plugged /\ r \in T ->
                 [in |-> TRUE, last |-> new, atr |-> card[r],
-                 evs |-> CardEvents(r, L[r], A[r], new)]
+                 evs |-> CardEvents(r, L[r], new)]
           [] OTHER -> [in |-> FALSE, last |-> Unaware, atr |-> 0, evs |-> <<>>]]
 
 TrackedOf(R) == {r \in Readers : R[r].in}
@@ -178,12 +186,14 @@ AtrOf(R) == [r \in Readers |-> R[r].atr]
 \* R1 then R2: R2's final state, R1's events followed by R2's
 Then(R1, R2) == [r \in Readers |-> [R2[r] EXCEPT !.evs = R1[r].evs \o R2[r].evs]]
 
-\* Make R the monitor's state and send its events to JS
+\* Make R the monitor's state and send its events to JS. A reader the
+\* monitor stops tracking is no longer a replugged one.
 Commit(R) ==
     /\ tracked' = TrackedOf(R)
     /\ last' = LastOf(R)
     /\ atr' = AtrOf(R)
     /\ Tell([r \in Readers |-> R[r].evs])
+    /\ replugged' = replugged \cap TrackedOf(R)
 
 \* The body of the loop after SCardGetStatusChange succeeds. pnp: the PnP
 \* entry came back CHANGED.
@@ -211,6 +221,7 @@ TypeOK ==
     /\ jsReaders \subseteq Readers
     /\ jsCard \in [Readers -> Nat]
     /\ bad \in BOOLEAN
+    /\ replugged \subseteq Readers
 
 Init ==
     /\ plugged = {}
@@ -227,6 +238,7 @@ Init ==
     /\ jsReaders = {}
     /\ jsCard = [r \in Readers |-> 0]
     /\ bad = FALSE
+    /\ replugged = {}
 
 -----------------------------------------------------------------------------
 (* The world *)
@@ -235,6 +247,7 @@ Plug(r) ==
     /\ r \notin plugged
     /\ plugged' = plugged \cup {r}
     /\ count' = [count EXCEPT ![r] = 0]
+    /\ replugged' = IF r \in tracked THEN replugged \cup {r} ELSE replugged
     /\ UNCHANGED <<card, nextCard>>
 
 Unplug(r) ==                      \* a card in it goes with it
@@ -242,7 +255,7 @@ Unplug(r) ==                      \* a card in it goes with it
     /\ plugged' = plugged \ {r}
     /\ card' = [card EXCEPT ![r] = 0]
     /\ count' = [count EXCEPT ![r] = 0]
-    /\ UNCHANGED nextCard
+    /\ UNCHANGED <<nextCard, replugged>>
 
 Insert(r) ==
     /\ r \in plugged
@@ -250,13 +263,13 @@ Insert(r) ==
     /\ card' = [card EXCEPT ![r] = nextCard]
     /\ nextCard' = nextCard + 1
     /\ count' = [count EXCEPT ![r] = @ + 1]
-    /\ UNCHANGED plugged
+    /\ UNCHANGED <<plugged, replugged>>
 
 Remove(r) ==
     /\ card[r] # 0
     /\ card' = [card EXCEPT ![r] = 0]
     /\ count' = [count EXCEPT ![r] = @ + 1]
-    /\ UNCHANGED <<plugged, nextCard>>
+    /\ UNCHANGED <<plugged, nextCard, replugged>>
 
 World ==
     /\ steps < MaxEnvSteps
@@ -281,12 +294,12 @@ Start ==
 BeginWait ==
     /\ mpc = "top"
     /\ CASE UnknownReader(tracked) ->
-            \* The error path: emit "error", sleep 1 s, loop. Not a
-            \* context-fatal error, so nothing is re-listed.
-            \* Candidate fix: re-list the readers.
+            \* The error path: emit "error", sleep 1 s, loop. It isn't a
+            \* context-fatal error; the current design re-lists the readers,
+            \* v3.8 just tries the same list again.
             /\ failed' = TRUE
-            /\ IF Fixed THEN Commit(Resync(tracked, last, atr))
-               ELSE UNCHANGED <<tracked, last, atr, js>>
+            /\ IF Design = "current" THEN Commit(Resync(tracked, last, atr))
+               ELSE UNCHANGED <<tracked, last, atr, js, replugged>>
             /\ UNCHANGED <<mpc, pnpBase>>
          [] \E r \in tracked : Changed(r, last[r]) ->
             Process(FALSE) /\ failed' = FALSE /\ UNCHANGED <<mpc, pnpBase>>
@@ -294,7 +307,7 @@ BeginWait ==
             /\ mpc' = "blocked"
             /\ pnpBase' = Cardinality(plugged)
             /\ failed' = FALSE
-            /\ UNCHANGED <<tracked, last, atr, js>>
+            /\ UNCHANGED <<tracked, last, atr, js, replugged>>
     /\ UNCHANGED world
 
 \* The blocked wait sees a change: a tracked reader's state, or the reader
@@ -308,12 +321,14 @@ Wake ==
     /\ pnpBase' = 0
     /\ UNCHANGED <<world, failed>>
 
-\* The 1 s timeout. (It can race with a change, so it is always enabled
-\* while blocked. The every-10-iterations refresh does the same work, so it
-\* is not modelled separately.) Candidate fix: re-list readers here too.
+\* The 1 s timeout: the current design re-lists the readers, v3.8 only
+\* re-reads the tracked ones. (It can race with a change, so it is always
+\* enabled while blocked. The every-10-iterations refresh does the same
+\* work, so it is not modelled separately.)
 Timeout ==
     /\ mpc = "blocked"
-    /\ Commit(IF Fixed THEN Resync(tracked, last, atr) ELSE RefreshAll(tracked, last, atr))
+    /\ Commit(IF Design = "current" THEN Resync(tracked, last, atr)
+              ELSE RefreshAll(tracked, last, atr))
     /\ mpc' = "top"
     /\ pnpBase' = 0
     /\ UNCHANGED <<world, failed>>
@@ -347,8 +362,14 @@ GoneReadersRemoved == <>[](jsReaders \subseteq plugged)
 PresenceConverges ==
     <>[](\A r \in jsReaders \cap plugged : (jsCard[r] # 0) = (card[r] # 0))
 
-\* ...and which card it is
-CardsConverge == <>[](\A r \in jsReaders \cap plugged : jsCard[r] = card[r])
+\* ...and which card it is - except for a reader replugged while tracked,
+\* where pcscd's restarted event counter can hide a swap
+CardsConverge ==
+    <>[](\A r \in (jsReaders \cap plugged) \ replugged : jsCard[r] = card[r])
+
+\* The same without the exception (Events-replug shows why it's needed)
+CardsConvergeEvenAfterReplug ==
+    <>[](\A r \in jsReaders \cap plugged : jsCard[r] = card[r])
 
 \* The monitor keeps getting back into a working wait, instead of failing
 \* every call. (A loop that changes nothing is, to TLA+, stuttering: TLC's

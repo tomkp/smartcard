@@ -61,7 +61,6 @@ private:
     void MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive);
     void UpdateReaderList();
     void ResyncReaderList();
-    void RefreshAllReaderStates();
     // code: the PC/SC error code, for "error" events only
     void EmitEvent(const std::string& eventType, const std::string& readerName,
                    DWORD state, const std::vector<uint8_t>& atr, DWORD code = 0);
