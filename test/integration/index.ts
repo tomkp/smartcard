@@ -142,7 +142,9 @@ describe('Card operations (hardware dependent)', () => {
             );
 
             try {
-                const selectCmd = Buffer.from([0xff, 0xca, 0x00, 0x00, 0x00]);
+                // ISO 7816 SELECT with no AID: every card answers it (the
+                // reader-level GET DATA, FF CA, only contactless readers do)
+                const selectCmd = Buffer.from([0x00, 0xa4, 0x04, 0x00, 0x00]);
                 const response = await card.transmit(selectCmd);
                 assert(
                     Buffer.isBuffer(response),

@@ -24,13 +24,16 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # pcscd lets tests that need a PC/SC service (but no reader) run.
-      # Its polkit check refuses the runner's user, which has no local
-      # session ("Security violation"), so run it without polkit.
+      # pcscd lets tests that need a PC/SC service run, and vsmartcard
+      # gives it a virtual reader and card (test/virtual/README.md). pcscd's
+      # polkit check refuses the runner's user, which has no local session
+      # ("Security violation"), so run it without polkit.
       - name: Install PC/SC dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y libpcsclite-dev pcscd
+          sudo apt-get update
+          sudo apt-get install -y libpcsclite-dev pcscd \
+            vsmartcard-vpcd vsmartcard-vpicc python3-pycryptodome
           sudo systemctl stop pcscd.socket pcscd.service
           sudo pcscd --disable-polkit
 
@@ -42,3 +45,7 @@ jobs:
 
       - name: Run native C++ tests
         run: npm run test:native
+
+      - name: Run virtual card tests (Linux)
+        if: runner.os == 'Linux'
+        run: npm run test:virtual
