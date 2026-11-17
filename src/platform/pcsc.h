@@ -47,5 +47,17 @@
     #define SMARTCARD_PCSC_COUNTS_CARD_EVENTS true
 #endif
 
+// pcsc-lite 2.3.0 and later put a count of reader events (readers added or
+// removed) in the upper 16 bits of the "\\?PnP?\Notification" entry's
+// dwEventState. Passed back as its dwCurrentState, the next call returns at
+// once if readers changed in between. Older pcsc-lite leaves the word 0,
+// and a 0 count turns the check off. Windows reports the reader count there
+// instead, untested here; macOS doesn't support the PnP entry.
+#if defined(_WIN32) || defined(__APPLE__)
+    #define SMARTCARD_PCSC_PNP_COUNTS_READER_EVENTS false
+#else
+    #define SMARTCARD_PCSC_PNP_COUNTS_READER_EVENTS true
+#endif
+
 // Helper macro for unused parameters
 #define PCSC_UNUSED(x) (void)(x)

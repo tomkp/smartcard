@@ -2690,11 +2690,13 @@ describe('Service outage recovery', () => {
     });
 });
 
+// The native addon itself, for tests that need real PC/SC. They skip when
+// the platform has no PC/SC service to use: SCARD_E_NO_SERVICE,
+// SCARD_E_SERVICE_STOPPED.
+const addonPath = resolve(__dirname, '../../../build/Release/smartcard_napi.node');
+const NO_SERVICE_CODES = [0x8010001d, 0x8010001e];
+
 describe('Worker teardown with a running monitor (spec finding 4)', () => {
-    const addonPath = resolve(
-        __dirname,
-        '../../../build/Release/smartcard_napi.node'
-    );
 
     // A worker starts a ReaderMonitor and exits, or is terminated, without
     // calling stop(). It runs in a child process because the bug killed the
@@ -2710,9 +2712,7 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
                 monitor.start(() => {});
                 started = true;
             } catch (err) {
-                // Skip only when there is no PC/SC service to monitor
-                // (SCARD_E_NO_SERVICE, SCARD_E_SERVICE_STOPPED)
-                const noService = [0x8010001d, 0x8010001e].includes(err.code);
+                const noService = ${JSON.stringify(NO_SERVICE_CODES)}.includes(err.code);
                 parentPort.postMessage(
                     (noService ? 'unavailable: ' : 'start failed: ') + err.message
                 );
@@ -2753,4 +2753,42 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
             assert.strictEqual(result.status, 0, output);
         });
     }
+});
+
+describe('Idle reader monitor', () => {
+    // With nothing changing, the monitor should sit in SCardGetStatusChange.
+    // A wait that returned at once every time - say, a PnP dwCurrentState
+    // the platform always reads as out of date - would spin a core instead.
+    it('does not spin while nothing changes', async (t) => {
+        const addon = require(addonPath) as {
+            ReaderMonitor: new () => {
+                start(callback: (event: MonitorEvent) => void): void;
+                stop(): void;
+            };
+        };
+        const monitor = new addon.ReaderMonitor();
+        try {
+            monitor.start(() => {});
+        } catch (err) {
+            const code = (err as { code?: number }).code;
+            if (code !== undefined && NO_SERVICE_CODES.includes(code)) {
+                t.skip(`no PC/SC service: ${(err as Error).message}`);
+                return;
+            }
+            throw err;
+        }
+        try {
+            await new Promise((r) => setTimeout(r, 500));
+            const before = process.cpuUsage();
+            await new Promise((r) => setTimeout(r, 2000));
+            const used = process.cpuUsage(before);
+            const ms = (used.user + used.system) / 1000;
+            // Idle is about 1 ms a second; a spinning monitor uses ~170 ms
+            // a second even when most of each wait's work happens in the
+            // PC/SC service
+            assert(ms < 100, `the monitor used ${ms.toFixed(0)} ms of CPU in 2 s`);
+        } finally {
+            monitor.stop();
+        }
+    });
 });
