@@ -270,9 +270,9 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
 
     while (running_ && sessionActive->load()) {
         // Periodic full resync to handle Windows PC/SC state drift (Issue
-        // #111). It re-lists readers too: under constant card activity the
-        // wait may not time out, and a reader plugged in between two waits
-        // is invisible to the PnP entry (see the timeout path below).
+        // #111). It re-lists readers too, because under constant card
+        // activity the wait may not time out, and the timeout path's
+        // re-list (see below) catches what the waits can't see.
         if (++iterationCount >= STATE_REFRESH_INTERVAL) {
             iterationCount = 0;
             std::lock_guard<std::mutex> lock(mutex_);
@@ -355,7 +355,12 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
             // - Without a reader event count (see pnpCurrentState) the PnP
             //   entry reports only reader changes made during a call; a
             //   reader plugged in between two waits is otherwise never
-            //   announced (spec/README.md, finding 2).
+            //   announced (spec/README.md, finding 2). With the count, one
+            //   plugged in before the first wait still isn't.
+            // - pcsc-lite compares a reader's card event counter only if
+            //   the one passed in is nonzero, so a card swapped between
+            //   waits in a reader that was plugged in with it doesn't end
+            //   the wait (Events-seeded-swap).
             // That is the periodic resync's work too, so restart its count.
             iterationCount = 0;
             std::lock_guard<std::mutex> lock(mutex_);
@@ -394,8 +399,6 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
                 LONG establishResult = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context_);
                 if (establishResult == SCARD_S_SUCCESS) {
                     contextValid_ = true;
-                    // A restarted pcscd counts reader events from scratch
-                    pnpCurrentState = SCARD_STATE_UNAWARE;
                     // JS's own context died in the same outage. Tell it
                     // first, so it replaces that context before handling
                     // the card events the resync below may emit (a card

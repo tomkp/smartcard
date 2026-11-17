@@ -26,18 +26,19 @@
 (* released in smartcard 3.8.0, before the fixes for the lost events these *)
 (* specs found (spec/README.md). "nopoll" asks a question: what if the     *)
 (* monitor relied on the reader event count instead of re-listing the      *)
-(* readers every time a wait times out?                                    *)
+(* readers when a wait times out (and every 10 waits)? "seeded" is the     *)
+(* same, but it reads the count once before its first listing.            *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
     Readers,       \* reader names, e.g. {r1, r2}
     MaxEnvSteps,   \* how many plug/unplug/insert/remove steps the world takes
-    Design,        \* "current", "nopoll", or "v3.8": as released in 3.8.0
+    Design,        \* "current", "nopoll", "seeded", or "v3.8": as released in 3.8.0
     PnpEvents      \* pcscd counts reader events for the PnP entry (2.3.0+)
 
 ASSUME /\ MaxEnvSteps \in Nat
-       /\ Design \in {"current", "nopoll", "v3.8"}
+       /\ Design \in {"current", "nopoll", "seeded", "v3.8"}
        /\ PnpEvents \in BOOLEAN
 
 VARIABLES
@@ -321,12 +322,14 @@ World ==
 -----------------------------------------------------------------------------
 (* MonitorLoop *)
 
-\* UpdateReaderList, then reader-attached for every reader
+\* UpdateReaderList, then reader-attached for every reader. "seeded" reads
+\* the reader event count first.
 Start ==
     /\ mpc = "start"
     /\ Commit(Resync({}, last, atr))
+    /\ pnpSeen' = IF Design = "seeded" THEN Reported("fresh") ELSE pnpSeen
     /\ mpc' = "top"
-    /\ UNCHANGED <<world, pnpVars, failed>>
+    /\ UNCHANGED <<world, pnpBase, pnpStart, failed>>
 
 \* Call SCardGetStatusChange with dwCurrentState = lastState for each
 \* tracked reader, plus the PnP entry with pnpSeen. It fails if a tracked
@@ -370,9 +373,10 @@ Wake ==
     /\ UNCHANGED <<world, failed>>
 
 \* The 1 s timeout: the current design re-lists the readers, v3.8 only
-\* re-reads the tracked ones, and "nopoll" does neither. (It can race with
-\* a change, so it is always enabled while blocked. The every-10-iterations
-\* refresh does the same work, so it is not modelled separately.)
+\* re-reads the tracked ones, and "nopoll"/"seeded" do neither. (It can
+\* race with a change, so it is always enabled while blocked. The
+\* every-10-iterations refresh does the same work, so it is not modelled
+\* separately: dropping one here drops both.)
 Timeout ==
     /\ mpc = "blocked"
     /\ CASE Design = "current" -> Commit(Resync(tracked, last, atr))

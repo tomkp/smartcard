@@ -17,7 +17,8 @@ monitor changes, the specs should change in the same PR.
 You need Java 11 or later. `spec/check.sh` runs every config in `cfg/` and
 checks that TLC returns the verdict written on the config's first line. An
 optional second line, `\* Trace:`, gives text the counterexample must contain,
-such as which crash it reaches. It takes a few minutes. CI
+such as which crash it reaches. It takes about 3 minutes on a laptop and
+about 9 in CI. CI
 (`.github/workflows/spec.yml`) runs it when `spec/` changes. On first use,
 `tlc.sh` downloads `tla2tools.jar` v1.7.4 into `.tools/` and checks its
 SHA-256.
@@ -68,7 +69,9 @@ Two ideas have no counterpart in Z:
 | `Lifecycle-hookorder` | What if `start()` added its teardown hook before creating the tsfn? | Use-after-free |
 | `Events-current` | The current monitor, with pcsc-lite 2.3.0 or later: every event makes sense, JS learns every reader and card, and the loop keeps waiting (3 readers, 6 world steps) | No errors |
 | `Events-oldpcsc` | The same with pcsc-lite before 2.3.0, which doesn't count reader events | No errors |
-| `Events-nopoll` | What if the monitor relied on pcsc-lite's reader event count instead of re-listing the readers every second? | Violated: a reader plugged in before the first wait is never announced |
+| `Events-nopoll` | What if the monitor relied on pcsc-lite's reader event count instead of re-listing the readers? | Violated: a reader plugged in before the first wait is never announced |
+| `Events-seeded` | The same, with the count read once before the first listing: are readers announced? | No errors |
+| `Events-seeded-swap` | The same: does JS learn which card is in the reader? | Violated: a swap in a reader plugged in with its card is missed |
 | `Events-replug` | The same, counting a reader replugged between waits | Violated: the one gap left (see Fixes) |
 | `Events-v3.8-swap` | 3.8.0: JS learns which card is in the reader | Violated (finding 1) |
 | `Events-v3.8-newreader` | 3.8.0: JS learns about every reader that is plugged in | Violated (finding 2) |
@@ -269,11 +272,20 @@ the check off (`Events-oldpcsc`). Windows reports the number of readers in
 that word instead, and macOS doesn't support the PnP entry, so the monitor
 does this only with pcsc-lite (`SMARTCARD_PCSC_PNP_COUNTS_READER_EVENTS`).
 
-The once-a-second re-list stays. `Events-nopoll` asks whether the count
-could replace it, and TLC says no. A reader plugged in between the first
-`UpdateReaderList` and the first wait is never announced, because the
-monitor has no count to pass back yet. Dropping the re-list would also
-need the count read before the first listing, and only with pcsc-lite.
+The re-list stays: on timeout, and every 10 waits. The model shows it has
+to, even with pcsc-lite 2.3.0 or later.
+
+- `Events-nopoll` drops it and relies on the count. A reader plugged in
+  between the first `UpdateReaderList` and the first wait is never
+  announced, because the monitor has no count to pass back yet.
+- `Events-seeded` also reads the count before that first listing. Then
+  the count alone announces every reader and notices every one that goes,
+  which checks that feeding it back works.
+- `Events-seeded-swap` finds a second gap. A reader plugged in with a card
+  already inside has a card event counter of 0, and pcsc-lite compares a
+  reader's counter only when the one passed in is nonzero. So if that card
+  is swapped between two waits, the wait doesn't end, and only the
+  re-list's fresh read catches the swap.
 
 Like `stop()`, the teardown hook waits for the monitor thread: normally
 up to the 1 s wait timeout, and longer if the monitor is in its error path
