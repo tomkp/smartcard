@@ -51,4 +51,5 @@ jobs:
         timeout-minutes: 10
         env:
           SMARTCARD_VIRTUAL_CARD_REQUIRED: 1
+          SMARTCARD_TEST_RESTART_PCSCD: 1
         run: npm run test:virtual

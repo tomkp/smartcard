@@ -288,9 +288,9 @@ to, even with pcsc-lite 2.3.0 or later.
   re-list's fresh read catches the swap.
 
 Like `stop()`, the teardown hook waits for the monitor thread: normally
-up to the 1 s wait timeout, and longer if the monitor is in its error path
-(a 1 s sleep that `SCardCancel` can't cut short). So a worker with a
-running monitor can take a second or more to exit.
+up to the 1 s wait timeout. (The 1 s pause between retries on the error
+path is cut short.) So a worker with a running monitor can take up to a
+second to exit.
 
 ## What the model leaves out
 
@@ -302,7 +302,8 @@ running monitor can take a second or more to exit.
   added or removed in between, so a wait that spans exactly 32767 reader
   events is out of scope.
 - **The service-outage recovery path** in `MonitorEvents`. `MonitorLifecycle`
-  has it only abstractly.
+  has it only abstractly. It is tested instead: `test/virtual` restarts
+  pcscd under a running monitor with a virtual card in the reader.
 - **The JS layer** (`lib/devices.ts`). One hypothesis worth modelling next:
   after a same-tick `stop()`/`start()`, events still queued in the old
   monitor's tsfn are delivered, because Node keeps dispatching a released

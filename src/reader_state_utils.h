@@ -47,4 +47,18 @@ inline CardEvent DetectCardStateChange(uint64_t oldState, uint64_t newState,
     return CardEvent::None;
 }
 
+// The same, comparing a reading from before a PC/SC service outage with
+// one from after it. Every card handle opened before the outage died with
+// it, so a card present at both readings is reported as Replaced: JS is
+// told the old card is gone and connects to it again. That also covers a
+// card swapped during the outage, which presence and pcscd's restarted
+// counters can't show.
+inline CardEvent DetectCardStateChangeAcrossOutage(uint64_t oldState, uint64_t newState,
+                                                   uint64_t presentMask) {
+    bool wasPresent = (oldState & presentMask) != 0;
+    bool isPresent = (newState & presentMask) != 0;
+    if (wasPresent && isPresent) return CardEvent::Replaced;
+    return DetectCardStateChange(oldState, newState, presentMask, false);
+}
+
 }  // namespace smartcard

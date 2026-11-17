@@ -453,7 +453,8 @@ MonReport ==
 
 \* Errors: EmitEvent("error") outside the lock, then under mutex_ either
 \* context recovery (monitor-recovered, then resync events) or
-\* (SCARD_E_UNKNOWN_READER) a resync, both of which may emit; then sleep 1 s
+\* (SCARD_E_UNKNOWN_READER) a resync, both of which may emit; then pause up
+\* to 1 s, which stop() cuts short
 MonError ==
     /\ mpc = "error"
     /\ Push

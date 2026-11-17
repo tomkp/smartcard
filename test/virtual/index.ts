@@ -7,14 +7,16 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { Devices } from '../../lib';
+import { Devices, ReaderMonitor } from '../../lib';
 import type { Card } from '../../lib/types';
 import {
     READER,
     REQUIRED,
+    RESTART_PCSCD,
     SELECT,
     SELECT_RESPONSE,
     VirtualCard,
+    pcscd,
     unavailable,
     waitFor,
 } from './virtual-card';
@@ -112,6 +114,58 @@ describe('Virtual card', { skip: REQUIRED ? false : reason }, () => {
             await virtualCard.remove();
         }
     });
+
+    // pcscd stops for 12 s, longer than the monitor's periodic re-list, with
+    // a card in the reader. Card handles die with the service.
+    it(
+        'Devices replaces a card held through a service outage, and detaches no reader',
+        {
+            timeout: 90000,
+            skip: RESTART_PCSCD ? false : 'set SMARTCARD_TEST_RESTART_PCSCD to let it restart pcscd',
+        },
+        async () => {
+            const { devices, events, report } = watch();
+            const detached: string[] = [];
+            devices.on('reader-detached', ({ name }) => detached.push(name));
+            // A second monitor, stopped during the outage
+            const monitor = new ReaderMonitor();
+            try {
+                await virtualCard.insert();
+                devices.start();
+                monitor.start(() => {});
+                await waitFor(() => events.length >= 1, 'card-inserted', report);
+                const before = events[0].card!;
+
+                await pcscd.stop();
+                // The monitors are now pausing between retries
+                await new Promise((r) => setTimeout(r, 1500));
+                const t = Date.now();
+                monitor.stop();
+                const stopTook = Date.now() - t;
+                await new Promise((r) => setTimeout(r, 10500));
+                await pcscd.start();
+                await virtualCard.insert();
+
+                await waitFor(() => events.length >= 3, 'card-removed, card-inserted', report);
+                assert.deepStrictEqual(
+                    events.map((e) => e.type),
+                    ['card-inserted', 'card-removed', 'card-inserted'],
+                    report()
+                );
+                assert.strictEqual(events[1].card, before);
+                const after = events[2].card!;
+                const response = await after.transmit(SELECT);
+                assert.strictEqual(response.toString('hex'), SELECT_RESPONSE);
+                assert.deepStrictEqual(detached, [], 'no reader was unplugged');
+                // It used to wait out a 1 s sleep
+                assert(stopTook < 250, `stop() during the outage took ${stopTook} ms`);
+            } finally {
+                monitor.stop();
+                devices.stop();
+                await virtualCard.remove();
+            }
+        }
+    );
 
     // Each environment that loads the addon (main thread, workers) builds
     // its own Cards; before #154 they shared one constructor reference,
