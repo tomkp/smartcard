@@ -2624,3 +2624,55 @@ describe('Devices.start() failure rollback', () => {
         devices.stop();
     });
 });
+
+describe('Service outage recovery', () => {
+    it('connects a card inserted during the outage on the replacement context', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
+        const mockReader = new MockReader('ACR122U');
+        const deadContext = new MockContext();
+        const liveContext = new MockContext();
+        deadContext.addReader(mockReader);
+        liveContext.addReader(mockReader);
+        const contexts = [deadContext, liveContext];
+        const mockMonitor = new MockReaderMonitor();
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return contexts.shift();
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const inserted: { reader: ReaderEventInfo; card: Card }[] = [];
+        const errors: Error[] = [];
+        devices.on(
+            'card-inserted',
+            (event: { reader: ReaderEventInfo; card: Card }) =>
+                inserted.push(event)
+        );
+        devices.on('error', (err: Error) => errors.push(err));
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // pcscd restarts, killing Devices' context, and a card goes in
+        // while it is down. The native monitor reports monitor-recovered
+        // first, then the card its resync found: handled on the old
+        // context, the insertion would fail with "Context is not valid".
+        deadContext.close();
+        mockMonitor.recover();
+        mockMonitor.insertCard('ACR122U', mockCard);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        assert.deepStrictEqual(errors, []);
+        assert.strictEqual(inserted.length, 1);
+        assert.strictEqual(inserted[0].reader.name, 'ACR122U');
+        assert(liveContext.isValid);
+
+        devices.stop();
+    });
+});

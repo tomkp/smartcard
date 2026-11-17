@@ -348,6 +348,15 @@ export class MockReaderMonitor implements ReaderMonitor {
             this._emitEvent('error', message, 0, null, code);
         }
     }
+
+    // The native monitor re-established its context after a service
+    // outage. Like the native monitor, emit this before any events the
+    // outage resync finds (insertCard, removeCard, ... after this call).
+    recover(): void {
+        if (this._running) {
+            this._emitEvent('monitor-recovered', '', 0, null);
+        }
+    }
 }
 
 interface MockAddon {
