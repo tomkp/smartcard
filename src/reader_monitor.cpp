@@ -374,7 +374,9 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
                     // inserted during the outage is connected on it).
                     EmitEvent("monitor-recovered", "", 0, {});
                     // Reader states were tracked against the dead context:
-                    // rebuild, and emit whatever changed during the outage.
+                    // rebuild, and emit the changes the resync can see. A
+                    // card swapped while the service was down is not one:
+                    // presence is unchanged and pcscd restarts its counters.
                     ResyncReaderList();
                 } else {
                     // The error event above already fired this cycle - stay

@@ -2656,22 +2656,34 @@ describe('Service outage recovery', () => {
         );
         devices.on('error', (err: Error) => errors.push(err));
 
+        let liveLookups = 0;
+        const liveListReaders = liveContext.listReaders.bind(liveContext);
+        liveContext.listReaders = () => {
+            liveLookups++;
+            return liveListReaders();
+        };
+
         devices.start();
         await new Promise((resolve) => setTimeout(resolve, 20));
 
         // pcscd restarts, killing Devices' context, and a card goes in
-        // while it is down. The native monitor reports monitor-recovered
-        // first, then the card its resync found: handled on the old
-        // context, the insertion would fail with "Context is not valid".
+        // while it is down. The native monitor reports the failed wait,
+        // then monitor-recovered, then the card its resync found: handled
+        // on the old context, the insertion would fail with "Context is
+        // not valid".
         deadContext.close();
+        mockMonitor.emitError('Service was stopped (0x8010001E)', 0x8010001e);
         mockMonitor.recover();
         mockMonitor.insertCard('ACR122U', mockCard);
         await new Promise((resolve) => setTimeout(resolve, 100));
 
-        assert.deepStrictEqual(errors, []);
+        // Only the outage's own error
+        assert.strictEqual(errors.length, 1);
         assert.strictEqual(inserted.length, 1);
         assert.strictEqual(inserted[0].reader.name, 'ACR122U');
-        assert(liveContext.isValid);
+        // Devices replaced its context and looked the reader up on the new one
+        assert.strictEqual(contexts.length, 0);
+        assert(liveLookups > 0);
 
         devices.stop();
     });

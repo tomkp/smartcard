@@ -350,8 +350,9 @@ export class MockReaderMonitor implements ReaderMonitor {
     }
 
     // The native monitor re-established its context after a service
-    // outage. Like the native monitor, emit this before any events the
-    // outage resync finds (insertCard, removeCard, ... after this call).
+    // outage. In native order: the failed wait's error (emitError), then
+    // this, then whatever the outage resync finds (insertCard, removeCard,
+    // ... after this call).
     recover(): void {
         if (this._running) {
             this._emitEvent('monitor-recovered', '', 0, null);
