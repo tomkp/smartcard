@@ -1,0 +1,40 @@
+name: Spec
+
+# Model-check the TLA+ specs of the reader monitor (spec/README.md).
+# TLC reads only spec/, so this runs when the specs change. A change to
+# src/reader_monitor.cpp should update the specs in the same PR.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'spec/**'
+      - '.github/workflows/spec.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'spec/**'
+      - '.github/workflows/spec.yml'
+
+jobs:
+  tlc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache tla2tools.jar
+        uses: actions/cache@v4
+        with:
+          path: spec/.tools
+          key: tla2tools-${{ hashFiles('spec/tlc.sh') }}
+
+      - name: Model-check
+        run: spec/check.sh
