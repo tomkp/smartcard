@@ -2624,3 +2624,67 @@ describe('Devices.start() failure rollback', () => {
         devices.stop();
     });
 });
+
+describe('Service outage recovery', () => {
+    it('connects a card inserted during the outage on the replacement context', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
+        const mockReader = new MockReader('ACR122U');
+        const deadContext = new MockContext();
+        const liveContext = new MockContext();
+        deadContext.addReader(mockReader);
+        liveContext.addReader(mockReader);
+        const contexts = [deadContext, liveContext];
+        const mockMonitor = new MockReaderMonitor();
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                return contexts.shift();
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const inserted: { reader: ReaderEventInfo; card: Card }[] = [];
+        const errors: Error[] = [];
+        devices.on(
+            'card-inserted',
+            (event: { reader: ReaderEventInfo; card: Card }) =>
+                inserted.push(event)
+        );
+        devices.on('error', (err: Error) => errors.push(err));
+
+        let liveLookups = 0;
+        const liveListReaders = liveContext.listReaders.bind(liveContext);
+        liveContext.listReaders = () => {
+            liveLookups++;
+            return liveListReaders();
+        };
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // pcscd restarts, killing Devices' context, and a card goes in
+        // while it is down. The native monitor reports the failed wait,
+        // then monitor-recovered, then the card its resync found: handled
+        // on the old context, the insertion would fail with "Context is
+        // not valid".
+        deadContext.close();
+        mockMonitor.emitError('Service was stopped (0x8010001E)', 0x8010001e);
+        mockMonitor.recover();
+        mockMonitor.insertCard('ACR122U', mockCard);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Only the outage's own error
+        assert.strictEqual(errors.length, 1);
+        assert.strictEqual(inserted.length, 1);
+        assert.strictEqual(inserted[0].reader.name, 'ACR122U');
+        // Devices replaced its context and looked the reader up on the new one
+        assert.strictEqual(contexts.length, 0);
+        assert(liveLookups > 0);
+
+        devices.stop();
+    });
+});

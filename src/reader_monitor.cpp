@@ -368,11 +368,16 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
                 LONG establishResult = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context_);
                 if (establishResult == SCARD_S_SUCCESS) {
                     contextValid_ = true;
-                    // Reader states were tracked against the dead context:
-                    // rebuild, emit whatever changed during the outage, and
-                    // tell the JS layer to refresh its own context.
-                    ResyncReaderList();
+                    // JS's own context died in the same outage. Tell it
+                    // first, so it replaces that context before handling
+                    // the card events the resync below may emit (a card
+                    // inserted during the outage is connected on it).
                     EmitEvent("monitor-recovered", "", 0, {});
+                    // Reader states were tracked against the dead context:
+                    // rebuild, and emit the changes the resync can see. A
+                    // card swapped while the service was down is not one:
+                    // presence is unchanged and pcscd restarts its counters.
+                    ResyncReaderList();
                 } else {
                     // The error event above already fired this cycle - stay
                     // at one error event per second while the service is down.
