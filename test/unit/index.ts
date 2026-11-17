@@ -2754,3 +2754,44 @@ describe('Worker teardown with a running monitor (spec finding 4)', () => {
         });
     }
 });
+
+describe('Idle reader monitor', () => {
+    // With nothing changing, the monitor should sit in SCardGetStatusChange.
+    // A wait that returned at once every time - say, a PnP dwCurrentState
+    // the platform always reads as out of date - would spin a core instead.
+    it('does not spin while nothing changes', async (t) => {
+        const addon = require(
+            resolve(__dirname, '../../../build/Release/smartcard_napi.node')
+        ) as {
+            ReaderMonitor: new () => {
+                start(callback: (event: MonitorEvent) => void): void;
+                stop(): void;
+            };
+        };
+        const monitor = new addon.ReaderMonitor();
+        try {
+            monitor.start(() => {});
+        } catch (err) {
+            // No PC/SC service to monitor (SCARD_E_NO_SERVICE,
+            // SCARD_E_SERVICE_STOPPED)
+            const code = (err as { code?: number }).code;
+            if (code === 0x8010001d || code === 0x8010001e) {
+                t.skip(`no PC/SC service: ${(err as Error).message}`);
+                return;
+            }
+            throw err;
+        }
+        try {
+            await new Promise((r) => setTimeout(r, 500));
+            const before = process.cpuUsage();
+            await new Promise((r) => setTimeout(r, 3000));
+            const used = process.cpuUsage(before);
+            const ms = (used.user + used.system) / 1000;
+            // Idle is a few ms; a spinning monitor uses hundreds even when
+            // most of each wait's work happens in the PC/SC service
+            assert(ms < 150, `the monitor used ${ms.toFixed(0)} ms of CPU in 3 s`);
+        } finally {
+            monitor.stop();
+        }
+    });
+});

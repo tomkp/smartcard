@@ -13,9 +13,10 @@
 (* any reader it is passed no longer exists; otherwise an entry is CHANGED *)
 (* when the reader's state differs from the dwCurrentState passed in,      *)
 (* including the per-reader event counter in the upper 16 bits; the        *)
-(* "\\?PnP?\Notification" entry, passed SCARD_STATE_UNAWARE as the monitor *)
-(* does, is CHANGED only if the number of readers changes while the call   *)
-(* is in progress.                                                         *)
+(* "\\?PnP?\Notification" entry is CHANGED if the number of readers        *)
+(* changes while the call is in progress, and - pcsc-lite 2.3.0 and later  *)
+(* (PnpEvents) - at once if its dwCurrentState holds a nonzero count of    *)
+(* reader events that is out of date.                                      *)
 (*                                                                         *)
 (* Granularity: a wait that returns is processed in the same atomic step,  *)
 (* so the world can only move between waits - while the monitor is busy    *)
@@ -23,16 +24,21 @@
 (*                                                                         *)
 (* Design "current" is the monitor on master. "v3.8" is the monitor as     *)
 (* released in smartcard 3.8.0, before the fixes for the lost events these *)
-(* specs found (spec/README.md).                                           *)
+(* specs found (spec/README.md). "nopoll" asks a question: what if the     *)
+(* monitor relied on the reader event count instead of re-listing the      *)
+(* readers every time a wait times out?                                    *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
     Readers,       \* reader names, e.g. {r1, r2}
     MaxEnvSteps,   \* how many plug/unplug/insert/remove steps the world takes
-    Design         \* "current", or "v3.8": the monitor as released in 3.8.0
+    Design,        \* "current", "nopoll", or "v3.8": as released in 3.8.0
+    PnpEvents      \* pcscd counts reader events for the PnP entry (2.3.0+)
 
-ASSUME MaxEnvSteps \in Nat /\ Design \in {"current", "v3.8"}
+ASSUME /\ MaxEnvSteps \in Nat
+       /\ Design \in {"current", "nopoll", "v3.8"}
+       /\ PnpEvents \in BOOLEAN
 
 VARIABLES
     \* the world, as pcscd sees it
@@ -48,6 +54,12 @@ VARIABLES
     last,         \* last[r]: readerStates_[r].lastState
     atr,          \* atr[r]: readerStates_[r].atr
     pnpBase,      \* the reader count when the blocked wait began
+    \* pcscd counts readers added or removed (PnpEvents). Only whether two
+    \* counts are equal matters, so a count is kept as "none" (0: unknown),
+    \* "fresh" (no reader added or removed since) or "stale".
+    pnpSeen,      \* the count in the PnP entry's dwCurrentState, from the
+                  \*   last wait (pnpCurrentState)
+    pnpStart,     \* the count when the blocked wait began
     failed,       \* the last SCardGetStatusChange failed (SCARD_E_UNKNOWN_READER)
     \* what the events have told JS
     jsReaders,    \* readers JS has been told are attached
@@ -60,8 +72,10 @@ VARIABLES
 
 world == <<plugged, card, count, nextCard, steps>>
 js == <<jsReaders, jsCard, bad>>
+pnpVars == <<pnpBase, pnpSeen, pnpStart>>
 vars == <<plugged, card, count, nextCard, steps, mpc, tracked, last, atr,
-          pnpBase, failed, jsReaders, jsCard, bad, replugged>>
+          pnpBase, pnpSeen, pnpStart, failed, jsReaders, jsCard, bad,
+          replugged>>
 
 -----------------------------------------------------------------------------
 (* What SCardGetStatusChange reports for a reader: dwEventState without   *)
@@ -75,6 +89,19 @@ Observe(r) ==
     IF r \in plugged
     THEN [kind |-> "known", present |-> card[r] # 0, count |-> count[r]]
     ELSE [kind |-> "unknown", present |-> FALSE, count |-> 0]
+
+Counts == {"none", "fresh", "stale"}
+
+\* What the monitor keeps of a count pcsc-lite reports in the PnP entry:
+\* nothing in v3.8 (it always passes UNAWARE), and 0 from a pcsc-lite that
+\* doesn't count
+Reported(c) == IF PnpEvents /\ Design # "v3.8" THEN c ELSE "none"
+
+\* The PnP entry is CHANGED as soon as the call starts
+PnpOutOfDate == pnpSeen = "stale"
+
+\* A reader added or removed makes every count taken before it stale
+Aged(c) == IF c = "fresh" THEN "stale" ELSE c
 
 \* Before waiting, pcsc-lite checks that every reader it was passed exists.
 \* If one doesn't, the whole call fails with SCARD_E_UNKNOWN_READER.
@@ -133,7 +160,7 @@ Detect(old, new) ==
 \* restarted (reader plugged back in) can only move back here: the model's
 \* counts are small, so there is no 16-bit wrap.
 Swapped(old, new) ==
-    /\ Design = "current"
+    /\ Design # "v3.8"
     /\ old.present /\ new.present
     /\ new.count > old.count
 
@@ -220,6 +247,8 @@ TypeOK ==
     /\ last \in [Readers -> Snap]
     /\ atr \in [Readers -> Nat]
     /\ pnpBase \in Nat
+    /\ pnpSeen \in Counts
+    /\ pnpStart \in Counts
     /\ failed \in BOOLEAN
     /\ jsReaders \subseteq Readers
     /\ jsCard \in [Readers -> Nat]
@@ -237,6 +266,8 @@ Init ==
     /\ last = [r \in Readers |-> Unaware]
     /\ atr = [r \in Readers |-> 0]
     /\ pnpBase = 0
+    /\ pnpSeen = "none"
+    /\ pnpStart = "none"
     /\ failed = FALSE
     /\ jsReaders = {}
     /\ jsCard = [r \in Readers |-> 0]
@@ -283,6 +314,8 @@ World ==
     /\ steps < MaxEnvSteps
     /\ steps' = steps + 1
     /\ \E r \in Readers : Plug(r) \/ Unplug(r) \/ Insert(r) \/ Remove(r)
+    /\ pnpSeen' = IF plugged' # plugged THEN Aged(pnpSeen) ELSE pnpSeen
+    /\ pnpStart' = IF plugged' # plugged THEN Aged(pnpStart) ELSE pnpStart
     /\ UNCHANGED <<mpc, tracked, last, atr, pnpBase, failed, jsReaders, jsCard, bad>>
 
 -----------------------------------------------------------------------------
@@ -293,12 +326,13 @@ Start ==
     /\ mpc = "start"
     /\ Commit(Resync({}, last, atr))
     /\ mpc' = "top"
-    /\ UNCHANGED <<world, pnpBase, failed>>
+    /\ UNCHANGED <<world, pnpVars, failed>>
 
 \* Call SCardGetStatusChange with dwCurrentState = lastState for each
-\* tracked reader, plus the PnP entry as SCARD_STATE_UNAWARE. It fails if a
-\* tracked reader has gone; returns at once if an entry already differs;
-\* otherwise blocks.
+\* tracked reader, plus the PnP entry with pnpSeen. It fails if a tracked
+\* reader has gone; returns at once if an entry already differs; otherwise
+\* blocks. A call that returns (or times out) reports the reader event count
+\* as of its start, unless it saw the reader list change.
 BeginWait ==
     /\ mpc = "top"
     /\ CASE UnknownReader(tracked) ->
@@ -306,39 +340,48 @@ BeginWait ==
             \* context-fatal error; the current design re-lists the readers,
             \* v3.8 just tries the same list again.
             /\ failed' = TRUE
-            /\ IF Design = "current" THEN Commit(Resync(tracked, last, atr))
+            /\ IF Design # "v3.8" THEN Commit(Resync(tracked, last, atr))
                ELSE UNCHANGED <<tracked, last, atr, js, replugged>>
-            /\ UNCHANGED <<mpc, pnpBase>>
-         [] \E r \in tracked : Changed(r, last[r]) ->
-            Process(FALSE) /\ failed' = FALSE /\ UNCHANGED <<mpc, pnpBase>>
+            /\ UNCHANGED <<mpc, pnpVars>>
+         [] PnpOutOfDate \/ \E r \in tracked : Changed(r, last[r]) ->
+            /\ Process(PnpOutOfDate)
+            /\ pnpSeen' = Reported("fresh")
+            /\ failed' = FALSE
+            /\ UNCHANGED <<mpc, pnpBase, pnpStart>>
          [] OTHER ->
             /\ mpc' = "blocked"
             /\ pnpBase' = Cardinality(plugged)
+            /\ pnpStart' = Reported("fresh")
             /\ failed' = FALSE
-            /\ UNCHANGED <<tracked, last, atr, js, replugged>>
+            /\ UNCHANGED <<tracked, last, atr, js, replugged, pnpSeen>>
     /\ UNCHANGED world
 
 \* The blocked wait sees a change: a tracked reader's state, or the reader
 \* count since the call began
 Wake ==
     /\ mpc = "blocked"
-    /\ LET pnp == Cardinality(plugged) # pnpBase IN
-       /\ pnp \/ \E r \in tracked : Changed(r, last[r])
-       /\ Process(pnp)
+    /\ LET listChanged == Cardinality(plugged) # pnpBase IN
+       /\ listChanged \/ \E r \in tracked : Changed(r, last[r])
+       /\ Process(listChanged)
+       /\ pnpSeen' = IF listChanged THEN Reported("fresh") ELSE pnpStart
     /\ mpc' = "top"
     /\ pnpBase' = 0
+    /\ pnpStart' = "none"
     /\ UNCHANGED <<world, failed>>
 
 \* The 1 s timeout: the current design re-lists the readers, v3.8 only
-\* re-reads the tracked ones. (It can race with a change, so it is always
-\* enabled while blocked. The every-10-iterations refresh does the same
-\* work, so it is not modelled separately.)
+\* re-reads the tracked ones, and "nopoll" does neither. (It can race with
+\* a change, so it is always enabled while blocked. The every-10-iterations
+\* refresh does the same work, so it is not modelled separately.)
 Timeout ==
     /\ mpc = "blocked"
-    /\ Commit(IF Design = "current" THEN Resync(tracked, last, atr)
-              ELSE RefreshAll(tracked, last, atr))
+    /\ CASE Design = "current" -> Commit(Resync(tracked, last, atr))
+         [] Design = "v3.8"    -> Commit(RefreshAll(tracked, last, atr))
+         [] OTHER              -> UNCHANGED <<tracked, last, atr, js, replugged>>
+    /\ pnpSeen' = pnpStart
     /\ mpc' = "top"
     /\ pnpBase' = 0
+    /\ pnpStart' = "none"
     /\ UNCHANGED <<world, failed>>
 
 Next == World \/ Start \/ BeginWait \/ Wake \/ Timeout

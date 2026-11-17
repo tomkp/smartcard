@@ -17,7 +17,7 @@ monitor changes, the specs should change in the same PR.
 You need Java 11 or later. `spec/check.sh` runs every config in `cfg/` and
 checks that TLC returns the verdict written on the config's first line. An
 optional second line, `\* Trace:`, gives text the counterexample must contain,
-such as which crash it reaches. It takes about 30 s. CI
+such as which crash it reaches. It takes a few minutes. CI
 (`.github/workflows/spec.yml`) runs it when `spec/` changes. On first use,
 `tlc.sh` downloads `tla2tools.jar` v1.7.4 into `.tools/` and checks its
 SHA-256.
@@ -66,7 +66,9 @@ Two ideas have no counterpart in Z:
 | `Lifecycle-teardown` | Node tears down the environment while the monitor runs | No errors |
 | `Lifecycle-v3.8-teardown` | 3.8.0: the same | Use-after-free (finding 4) |
 | `Lifecycle-hookorder` | What if `start()` added its teardown hook before creating the tsfn? | Use-after-free |
-| `Events-current` | The current monitor: every event makes sense, JS learns every reader and card, and the loop keeps waiting (3 readers, 6 world steps) | No errors |
+| `Events-current` | The current monitor, with pcsc-lite 2.3.0 or later: every event makes sense, JS learns every reader and card, and the loop keeps waiting (3 readers, 6 world steps) | No errors |
+| `Events-oldpcsc` | The same with pcsc-lite before 2.3.0, which doesn't count reader events | No errors |
+| `Events-nopoll` | What if the monitor relied on pcsc-lite's reader event count instead of re-listing the readers every second? | Violated: a reader plugged in before the first wait is never announced |
 | `Events-replug` | The same, counting a reader replugged between waits | Violated: the one gap left (see Fixes) |
 | `Events-v3.8-swap` | 3.8.0: JS learns which card is in the reader | Violated (finding 1) |
 | `Events-v3.8-newreader` | 3.8.0: JS learns about every reader that is plugged in | Violated (finding 2) |
@@ -256,11 +258,22 @@ What is still not covered:
   `CardsConverge`, excuses a replugged reader with a ghost variable until JS
   is next told an event about it, and `Events-replug` keeps the gap visible.
 
-With fix 2 in place the PnP entry is a latency optimisation: removing the
-PnP resync from the model still passes. On pcsc-lite 2.3.0 and later,
-feeding the PnP entry's previous `dwEventState` back as its `dwCurrentState`
-would catch reader changes between calls directly, but only on that
-platform.
+With fix 2 in place the PnP entry is a latency optimisation. Since then
+the monitor also uses it to see reader changes between waits sooner.
+pcsc-lite 2.3.0 and later count readers added or removed, and report the
+count in the upper 16 bits of the PnP entry's `dwEventState`. The monitor
+passes it back as that entry's `dwCurrentState`, so a reader plugged in or
+unplugged between two waits ends the next wait at once, instead of at the
+next re-list up to a second later. Older pcsc-lite reports 0, which turns
+the check off (`Events-oldpcsc`). Windows reports the number of readers in
+that word instead, and macOS doesn't support the PnP entry, so the monitor
+does this only with pcsc-lite (`SMARTCARD_PCSC_PNP_COUNTS_READER_EVENTS`).
+
+The once-a-second re-list stays. `Events-nopoll` asks whether the count
+could replace it, and TLC says no. A reader plugged in between the first
+`UpdateReaderList` and the first wait is never announced, because the
+monitor has no count to pass back yet. Dropping the re-list would also
+need the count read before the first listing, and only with pcsc-lite.
 
 Like `stop()`, the teardown hook waits for the monitor thread: normally
 up to the 1 s wait timeout, and longer if the monitor is in its error path
@@ -272,6 +285,10 @@ running monitor can take a second or more to exit.
 - **Other platforms.** Only pcsc-lite's PC/SC semantics are modelled.
   Windows WinSCard and macOS behave differently around the PnP entry and the
   event counter, and may not fail a whole call for an unknown reader.
+- **Counter wrap-around.** pcscd's reader event count is 16 bits and wraps
+  back to 1. The model treats two counts as different whenever a reader was
+  added or removed in between, so a wait that spans exactly 32767 reader
+  events is out of scope.
 - **The service-outage recovery path** in `MonitorEvents`. `MonitorLifecycle`
   has it only abstractly.
 - **The JS layer** (`lib/devices.ts`). One hypothesis worth modelling next:
