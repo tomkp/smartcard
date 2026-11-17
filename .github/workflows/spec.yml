@@ -1,0 +1,36 @@
+name: Spec
+
+# Model-check the TLA+ specs of the reader monitor (spec/README.md).
+# Runs when the specs or the code they model change.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'spec/**'
+      - 'src/reader_monitor.*'
+      - 'src/reader_state_utils.h'
+      - '.github/workflows/spec.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'spec/**'
+      - 'src/reader_monitor.*'
+      - 'src/reader_state_utils.h'
+      - '.github/workflows/spec.yml'
+
+jobs:
+  tlc:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Model-check
+        run: spec/check.sh
