@@ -2800,22 +2800,21 @@ describe('Addon loaded by several environments', () => {
     // segfaults once a worker has exited), and after a worker exited the
     // main thread's listReaders() built Readers through a constructor from
     // that dead environment. Runs in a child process: both killed it.
-    it('keeps working in the main thread after workers that loaded it exit', () => {
+    it('keeps working in the main thread after workers that loaded it exit', (t) => {
         const mainSource = `
             const { Worker } = require('node:worker_threads');
             const addonPath = ${JSON.stringify(addonPath)};
             const addon = require(addonPath);
             function useAddon() {
-                let context;
+                // Without a PC/SC service, loading is still exercised
                 try {
-                    context = new addon.Context();
+                    const context = new addon.Context();
+                    context.listReaders();
+                    context.close();
                 } catch (err) {
-                    // No PC/SC service: loading is still exercised
-                    if (${JSON.stringify(NO_SERVICE_CODES)}.includes(err.code)) return;
-                    throw err;
+                    if (!${JSON.stringify(NO_SERVICE_CODES)}.includes(err.code)) throw err;
+                    console.log('no PC/SC service');
                 }
-                context.listReaders();
-                context.close();
             }
             useAddon();
             let started = 0;
@@ -2837,5 +2836,8 @@ describe('Addon loaded by several environments', () => {
         assert.strictEqual(result.signal, null, output);
         assert.strictEqual(result.status, 0, output);
         assert.match(result.stdout, /done/, output);
+        if (result.stdout.includes('no PC/SC service')) {
+            t.diagnostic('no PC/SC service: only loading the addon was exercised');
+        }
     });
 });

@@ -1,6 +1,7 @@
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
 #include "pcsc_napi_error.h"
+#include "addon_data.h"
 #include "async_workers.h"
 #include <cstring>
 

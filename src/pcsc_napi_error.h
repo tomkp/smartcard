@@ -3,22 +3,7 @@
 #include <napi.h>
 #include <string>
 #include "pcsc_errors.h"
-
-// Per-instance addon state (each worker_thread loads its own instance).
-// Every JS reference the addon keeps belongs here, not in a static: a
-// static is shared by all the environments that load the addon, so each
-// load overwrote the last one's reference (deleting it from the wrong
-// thread), and after a worker exited the others used a reference into
-// that dead environment.
-struct AddonData {
-    // (message, code) => Error, registered by lib/index.ts via
-    // setErrorFactory() so native failures arrive as the typed PCSCError
-    // classes from lib/errors.ts
-    Napi::FunctionReference errorFactory;
-    // Classes the addon instantiates itself (listReaders, connect)
-    Napi::FunctionReference readerConstructor;
-    Napi::FunctionReference cardConstructor;
-};
+#include "addon_data.h"
 
 // Build a JS Error for a PC/SC failure. The code is exposed unsigned
 // (e.g. 0x80100069) to match the constants in lib/errors.ts; message
