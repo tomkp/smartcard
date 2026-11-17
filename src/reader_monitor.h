@@ -9,6 +9,7 @@
 #include <mutex>
 #include <unordered_map>
 #include "platform/pcsc.h"
+#include "reader_state_utils.h"
 
 /**
  * ReaderMonitor - Native PC/SC event monitoring using ThreadSafeFunction
@@ -61,10 +62,11 @@ private:
     void MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive);
     void UpdateReaderList();
     void ResyncReaderList();
-    void RefreshAllReaderStates();
     // code: the PC/SC error code, for "error" events only
     void EmitEvent(const std::string& eventType, const std::string& readerName,
                    DWORD state, const std::vector<uint8_t>& atr, DWORD code = 0);
     void ApplyCardStateChange(ReaderInfo& info, const std::string& readerName,
                               const SCARD_READERSTATE& readerState);
+    void EmitCardEvent(smartcard::CardEvent event, const std::string& readerName,
+                       DWORD state, const std::vector<uint8_t>& atr);
 };

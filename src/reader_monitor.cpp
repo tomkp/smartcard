@@ -178,37 +178,57 @@ Napi::Value ReaderMonitor::GetIsRunning(const Napi::CallbackInfo& info) {
     return Napi::Boolean::New(info.Env(), running_.load());
 }
 
-// Single commit point for card state transitions: all three detection paths
-// (main wait, timeout re-query, periodic refresh) must apply identical
-// masking, ATR, and event rules or their stored states drift apart.
+// Emit what a detected card event means to JS. state is the reader's
+// state now; a Replaced card is reported as the old card leaving, then the
+// new one arriving, and the leaving event gets that state as an empty
+// reader so its flags match the event.
+void ReaderMonitor::EmitCardEvent(CardEvent event, const std::string& readerName,
+                                  DWORD state, const std::vector<uint8_t>& atr) {
+    if (event == CardEvent::Removed) {
+        EmitEvent("card-removed", readerName, state, {});
+    } else if (event == CardEvent::Replaced) {
+        EmitEvent("card-removed", readerName,
+                  (state & ~SCARD_STATE_PRESENT) | SCARD_STATE_EMPTY, {});
+    }
+    if (event == CardEvent::Inserted || event == CardEvent::Replaced) {
+        EmitEvent("card-inserted", readerName, state, atr);
+    }
+}
+
+// Commit point for card state transitions seen by the main wait.
+// ResyncReaderList (PnP, timeouts, periodic refresh, recovery) detects
+// events from its fresh reads with the same DetectCardStateChange and
+// EmitCardEvent; UpdateReaderList, which stores those reads, applies the
+// same IGNORE masking.
 void ReaderMonitor::ApplyCardStateChange(ReaderInfo& info, const std::string& readerName,
                                          const SCARD_READERSTATE& readerState) {
     DWORD newState = readerState.dwEventState & ~SCARD_STATE_CHANGED;
-    CardEvent event = DetectCardStateChange(info.lastState, newState, SCARD_STATE_PRESENT);
+    CardEvent event = DetectCardStateChange(info.lastState, newState, SCARD_STATE_PRESENT,
+                                            SMARTCARD_PCSC_COUNTS_CARD_EVENTS);
 
     // Commit so a stale lastState can't make the next SCardGetStatusChange
     // re-report the same change - but never store SCARD_STATE_IGNORE (fed
     // back as dwCurrentState it excludes the reader from future waits), and
-    // don't absorb an unknown/empty no-event result: the PnP path handles
-    // vanished readers.
+    // don't absorb an unknown/empty no-event result: a reader that vanished
+    // during the wait is dropped by the PnP resync, one that vanished
+    // between waits by the SCARD_E_UNKNOWN_READER resync.
     bool unusable = readerState.dwEventState == 0 ||
                     (newState & SCARD_STATE_UNKNOWN) != 0;
     if (event != CardEvent::None || !unusable) {
         info.lastState = newState & ~SCARD_STATE_IGNORE;
     }
 
-    if (event == CardEvent::Inserted) {
+    if (event == CardEvent::Inserted || event == CardEvent::Replaced) {
         // cbAtr comes from the PC/SC service; clamp to the actual buffer size
         DWORD atrLen = readerState.cbAtr;
         if (atrLen > sizeof(readerState.rgbAtr)) {
             atrLen = sizeof(readerState.rgbAtr);
         }
         info.atr.assign(readerState.rgbAtr, readerState.rgbAtr + atrLen);
-        EmitEvent("card-inserted", readerName, newState, info.atr);
     } else if (event == CardEvent::Removed) {
         info.atr.clear();
-        EmitEvent("card-removed", readerName, newState, {});
     }
+    EmitCardEvent(event, readerName, newState, info.atr);
 }
 
 void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive) {
@@ -227,14 +247,18 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
     std::vector<SCARD_READERSTATE> states;
     std::vector<std::string> readerNames;
     int iterationCount = 0;
+    // The last wait failed with SCARD_E_UNKNOWN_READER right after a resync
+    bool resyncedForUnknownReader = false;
 
     while (running_ && sessionActive->load()) {
-        // Periodic full state refresh to handle Windows PC/SC state drift (Issue #111)
-        // This ensures we don't miss events if the state tracking gets out of sync
+        // Periodic full resync to handle Windows PC/SC state drift (Issue
+        // #111). It re-lists readers too: under constant card activity the
+        // wait may not time out, and a reader plugged in between two waits
+        // is invisible to the PnP entry (see the timeout path below).
         if (++iterationCount >= STATE_REFRESH_INTERVAL) {
             iterationCount = 0;
             std::lock_guard<std::mutex> lock(mutex_);
-            RefreshAllReaderStates();
+            ResyncReaderList();
         }
 
         // Build states array using reader names from our map
@@ -244,10 +268,13 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
             readerNames.clear();
 
             // Reserve for all tracked readers + the PnP entry so no
-            // push_back reallocates after szReader pointers are taken
-            // (SSO strings move with the vector - see the refresh block
-            // above). With a single reader the PnP push_back below is
-            // otherwise guaranteed to reallocate on the first iteration.
+            // push_back reallocates after szReader pointers are taken: a
+            // reallocation moves the strings, and short names live inline
+            // in the string object (SSO - 15 chars on MSVC, e.g. "ACS ACR122
+            // 0"), so every szReader taken earlier would dangle and
+            // SCardGetStatusChange would read garbage. With a single reader
+            // the PnP push_back below would otherwise reallocate on the first
+            // iteration.
             readerNames.reserve(readerStates_.size() + 1);
 
             // Add known readers - use the map for name-based lookup
@@ -278,13 +305,35 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
             break;
         }
 
-        if (result == static_cast<LONG>(SCARD_E_TIMEOUT)) {
-            // Timeout - query fresh state to detect missed events (Issue #111)
-            // On Windows, dwEventState after timeout may just mirror dwCurrentState
-            // rather than reflecting actual hardware state. We must explicitly
-            // query with SCARD_STATE_UNAWARE to get the real current state.
+        // A reader passed to the wait has gone: pcsc-lite checks every name
+        // before waiting and rejects the whole call, so every later wait
+        // would fail the same way and no reader's events get through
+        // (spec/README.md, finding 3). An unplug is routine, so re-list and
+        // wait again at once - no error event, no sleep. If it fails the
+        // same way straight after a re-list, take the error path below (one
+        // error a second, still re-listing) so a lasting failure can't spin.
+        bool unknownReader = result == static_cast<LONG>(SCARD_E_UNKNOWN_READER);
+        if (unknownReader && !resyncedForUnknownReader) {
+            resyncedForUnknownReader = true;
             std::lock_guard<std::mutex> lock(mutex_);
-            RefreshAllReaderStates();
+            ResyncReaderList();
+            continue;
+        }
+        resyncedForUnknownReader = unknownReader;
+
+        if (result == static_cast<LONG>(SCARD_E_TIMEOUT)) {
+            // Timeout - re-list readers and re-read every reader with
+            // SCARD_STATE_UNAWARE to catch missed events:
+            // - On Windows, dwEventState after timeout may just mirror
+            //   dwCurrentState rather than the hardware (Issue #111).
+            // - The PnP entry is passed SCARD_STATE_UNAWARE, so pcsc-lite
+            //   reports only reader changes made during a call; a reader
+            //   plugged in between two waits is otherwise never announced
+            //   (spec/README.md, finding 2).
+            // That is the periodic resync's work too, so restart its count.
+            iterationCount = 0;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ResyncReaderList();
             continue;
         }
 
@@ -329,6 +378,11 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
                     // at one error event per second while the service is down.
                     context_ = 0;
                 }
+            } else if (ucode == SCARD_E_UNKNOWN_READER) {
+                // Still failing after the re-list above: keep re-listing,
+                // once a second
+                std::lock_guard<std::mutex> lock(mutex_);
+                ResyncReaderList();
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -363,47 +417,13 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
     }
 }
 
-// Re-query every tracked reader with SCARD_STATE_UNAWARE and commit/emit any
-// missed transitions - the shared body of the periodic refresh and the
-// timeout re-query (Issue #111). Caller holds mutex_.
-void ReaderMonitor::RefreshAllReaderStates() {
-    if (readerStates_.empty()) {
-        return;
-    }
-
-    // Reserve before taking c_str() pointers: a reallocating push_back moves
-    // SSO strings and dangles every previously captured szReader
-    std::vector<SCARD_READERSTATE> states;
-    std::vector<std::string> names;
-    names.reserve(readerStates_.size());
-    states.reserve(readerStates_.size());
-
-    for (const auto& pair : readerStates_) {
-        names.push_back(pair.first);
-        SCARD_READERSTATE state = {};
-        state.szReader = names.back().c_str();
-        state.dwCurrentState = SCARD_STATE_UNAWARE;  // Force fresh state
-        states.push_back(state);
-    }
-
-    if (SCardGetStatusChange(context_, 0, states.data(), states.size()) != SCARD_S_SUCCESS) {
-        return;
-    }
-
-    for (size_t i = 0; i < states.size(); i++) {
-        auto it = readerStates_.find(names[i]);
-        if (it != readerStates_.end()) {
-            ApplyCardStateChange(it->second, names[i], states[i]);
-        }
-    }
-}
-
 // Rebuild readerStates_ and emit the difference: reader-attached/detached
-// for membership changes, card-inserted/removed for presence changes on
-// surviving readers. Needed because UpdateReaderList re-seeds lastState
-// from a fresh SCARD_STATE_UNAWARE query, which would otherwise silently
-// latch away any transition that happened since the last wait (PnP churn,
-// or a service outage the recovery path just healed). Caller holds mutex_.
+// for membership changes, card-inserted/removed for presence changes and
+// swaps on surviving readers. Needed because UpdateReaderList re-seeds
+// lastState from a fresh SCARD_STATE_UNAWARE query, which would otherwise
+// silently latch away any transition that happened since the last wait
+// (PnP churn, a vanished reader, a timeout, or a service outage the
+// recovery path just healed). Caller holds mutex_.
 void ReaderMonitor::ResyncReaderList() {
     std::unordered_map<std::string, DWORD> oldStates;
     for (const auto& pair : readerStates_) {
@@ -429,12 +449,10 @@ void ReaderMonitor::ResyncReaderList() {
         if (oldIt == oldStates.end()) {
             continue;  // New reader - reader-attached already emitted
         }
-        CardEvent event = DetectCardStateChange(oldIt->second, pair.second.lastState, SCARD_STATE_PRESENT);
-        if (event == CardEvent::Inserted) {
-            EmitEvent("card-inserted", pair.first, pair.second.lastState, pair.second.atr);
-        } else if (event == CardEvent::Removed) {
-            EmitEvent("card-removed", pair.first, pair.second.lastState, {});
-        }
+        CardEvent event = DetectCardStateChange(oldIt->second, pair.second.lastState,
+                                                SCARD_STATE_PRESENT,
+                                                SMARTCARD_PCSC_COUNTS_CARD_EVENTS);
+        EmitCardEvent(event, pair.first, pair.second.lastState, pair.second.atr);
     }
 }
 
@@ -476,6 +494,12 @@ void ReaderMonitor::UpdateReaderList() {
     }
 
     LONG statusResult = SCardGetStatusChange(context_, 0, states.data(), states.size());
+    if (statusResult == static_cast<LONG>(SCARD_E_UNKNOWN_READER)) {
+        // A listed reader vanished before this read (pcsc-lite rejects the
+        // whole call). Keep the current map rather than announce readers
+        // with no state; the next resync lists again.
+        return;
+    }
     bool seeded = (statusResult == SCARD_S_SUCCESS);
 
     // Update reader states map (Issue #111 fix: use map keyed by name)
@@ -484,7 +508,9 @@ void ReaderMonitor::UpdateReaderList() {
         ReaderInfo info;
         info.lastState = SCARD_STATE_UNAWARE;
         if (seeded) {
-            info.lastState = states[i].dwEventState & ~SCARD_STATE_CHANGED;
+            // Never store SCARD_STATE_IGNORE: fed back as dwCurrentState it
+            // excludes the reader from future waits (as ApplyCardStateChange)
+            info.lastState = states[i].dwEventState & ~(SCARD_STATE_CHANGED | SCARD_STATE_IGNORE);
             DWORD atrLen = states[i].cbAtr;
             if (atrLen > sizeof(states[i].rgbAtr)) {
                 atrLen = sizeof(states[i].rgbAtr);

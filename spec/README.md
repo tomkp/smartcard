@@ -2,9 +2,10 @@
 
 Two TLA+ specifications of the native `ReaderMonitor`
 ([`src/reader_monitor.cpp`](../src/reader_monitor.cpp)), model-checked with
-TLC. They were written against `master` at `f3d782e`, and the line links
-below point at that commit. When the monitor changes, the specs should
-change in the same PR.
+TLC. `Design = "current"` models the monitor as it is now. `Design = "v3.8"`
+models it as released in smartcard 3.8.0 (`master` at `f3d782e`), where the
+specs found findings 1–3; the line links below point at that commit. When the
+monitor changes, the specs should change in the same PR.
 
 | Spec | Question |
 |---|---|
@@ -25,7 +26,7 @@ To see a counterexample:
 
 ```sh
 cd spec
-./tlc.sh MonitorEvents.tla cfg/Events-swap.cfg -difftrace
+./tlc.sh MonitorEvents.tla cfg/Events-v3.8-swap.cfg -difftrace
 ```
 
 `-difftrace` prints only the variables that changed in each step.
@@ -63,18 +64,22 @@ Two ideas have no counterpart in Z:
 | `Lifecycle-boundedq` | What if the tsfn queue were bounded? | Deadlock |
 | `Lifecycle-notimeout` | What if the wait had no timeout? | `stop()` can hang forever |
 | `Lifecycle-teardown` | Node tears down the environment while the monitor runs | Use-after-free |
-| `Events-safety` | Every event makes sense, and the monitor tracks the readers JS was told about (3 readers, 6 world steps) | No errors |
-| `Events-swap` | JS learns which card is in the reader | Violated |
-| `Events-newreader` | JS learns about every reader that is plugged in | Violated |
-| `Events-gonereader` | JS learns about every reader that goes away | Violated |
-| `Events-deaf` | JS learns whether each reader holds a card | Violated |
-| `Events-fixed` | Every event property, with the candidate fixes applied | No errors |
+| `Events-current` | The current monitor: every event makes sense, JS learns every reader and card, and the loop keeps waiting (3 readers, 6 world steps) | No errors |
+| `Events-replug` | The same, counting a reader replugged between waits | Violated: the one gap left (see Fixes) |
+| `Events-v3.8-swap` | 3.8.0: JS learns which card is in the reader | Violated (finding 1) |
+| `Events-v3.8-newreader` | 3.8.0: JS learns about every reader that is plugged in | Violated (finding 2) |
+| `Events-v3.8-gonereader` | 3.8.0: JS learns about every reader that goes away | Violated (finding 3) |
+| `Events-v3.8-deaf` | 3.8.0: JS learns whether each reader holds a card | Violated (finding 3) |
 
 The two pre-#139 configs reproduce, step for step, the two bugs that #139's
 commit message describes. A human reviewer found those bugs; TLC finds them
 in under a second. The current code passes the same checks.
 
 ## Findings
+
+Findings 1–3 were in the monitor up to 3.8.0 and are fixed (see Fixes below);
+their configs keep them as regression checks against `Design = "v3.8"`.
+Finding 4 is open.
 
 Findings 1–3 all come from the same window: the time between one
 `SCardGetStatusChange` returning and the next one starting. That covers
@@ -89,7 +94,7 @@ The PC/SC behaviour behind findings 1–3 comes from pcsc-lite's source
 
 ### 1. A card swapped between two waits is never reported
 
-This is `Events-swap`:
+This is `Events-v3.8-swap`:
 
 1. Reader r1 is plugged in with card 1. pcscd's event counter for r1 is 1.
 2. The monitor starts and JS is told `reader-attached r1` with card 1.
@@ -108,7 +113,7 @@ counter in `lastState` but ignores it when deciding whether to emit.
 
 ### 2. A reader plugged in between two waits is never announced
 
-This is `Events-newreader`. The monitor starts with no readers, and r1 is
+This is `Events-v3.8-newreader`. The monitor starts with no readers, and r1 is
 plugged in before the first wait. The PnP entry is passed
 `SCARD_STATE_UNAWARE` ([`reader_monitor.cpp:266`](https://github.com/tomkp/smartcard/blob/f3d782eb1a57603ae1934dc90dba2feeb9715281/src/reader_monitor.cpp#L266)). pcsc-lite flags it only if
 the reader count changes *during* the call, counted from the start of that
@@ -118,7 +123,7 @@ event happens.
 
 ### 3. A reader unplugged between two waits makes the monitor go deaf
 
-This is `Events-gonereader` and `Events-deaf`. Before waiting, pcsc-lite
+This is `Events-v3.8-gonereader` and `Events-v3.8-deaf`. Before waiting, pcsc-lite
 checks every reader name it is passed. If one no longer exists, the whole
 `SCardGetStatusChange` call fails with `SCARD_E_UNKNOWN_READER`. So once a
 tracked reader is unplugged between waits, every main wait fails. The error
@@ -131,9 +136,9 @@ The monitor stays in this state until the reader is plugged back in or the
 monitor is restarted. Meanwhile:
 
 - JS gets one `error` event per second, with code `0x80100009`.
-- JS is never told the reader has gone (`Events-gonereader`). If it held a
+- JS is never told the reader has gone (`Events-v3.8-gonereader`). If it held a
   card, there is no `card-removed` either.
-- Card events on every other reader are lost (`Events-deaf`). In TLC's trace,
+- Card events on every other reader are lost (`Events-v3.8-deaf`). In TLC's trace,
   readers r1 and r2 are announced and a card goes into r1. Then r2 is
   unplugged before the next wait. The wait fails (`failed = TRUE`), and JS
   never hears about the card in r1.
@@ -179,31 +184,52 @@ worker-termination test under ASan would settle it.
   would wait forever (`Lifecycle-notimeout`). So `stop()` can block the JS
   thread for up to about 1 s, by design.
 
-## Candidate fixes (`Fixed = TRUE`)
+## Fixes for findings 1–3
 
-`Events-fixed` passes every event property with 3 readers and 6 world steps:
+`Events-current` passes every event property with 3 readers and 6 world
+steps. The code now does this:
 
-1. **Swaps.** In `ApplyCardStateChange` and `ResyncReaderList`: if a card is
-   present before and after, but the event counter (`dwEventState >> 16`) or
-   the ATR changed, emit `card-removed` and then `card-inserted`.
-2. **Missed attaches.** After a timeout, call `ResyncReaderList`, which
-   re-lists the readers, instead of `RefreshAllReaderStates`. The periodic
-   refresh should do the same, or continuous card activity on one reader can
-   delay the re-list.
+1. **Swaps.** `DetectCardStateChange` (`src/reader_state_utils.h`) returns
+   `Replaced` when a card is present at both readings and pcsc-lite's event
+   counter (`dwEventState >> 16`) moved *forward* in between.
+   `ApplyCardStateChange` and `ResyncReaderList` then emit `card-removed`
+   followed by `card-inserted`. pcscd restarts the counter at 0 when it
+   re-creates a reader (plugged back in, or pcscd restarted) and doesn't
+   count a card already inside, so a restarted counter reads as a backward
+   jump and is never taken for a swap. Native unit tests cover the detection.
+2. **Missed attaches.** The timeout path and the periodic refresh call
+   `ResyncReaderList`, which re-lists the readers, in place of
+   `RefreshAllReaderStates`. A reader plugged in between waits is announced
+   within about a second.
 3. **Missed detaches.** When `SCardGetStatusChange` fails with
-   `SCARD_E_UNKNOWN_READER`, call `ResyncReaderList`.
+   `SCARD_E_UNKNOWN_READER`, the monitor calls `ResyncReaderList` and waits
+   again at once. An unplug is routine, so there is no `error` event and no
+   sleep. If the very next wait fails the same way, it falls back to the
+   error path (one `error` a second, still re-listing), so a lasting failure
+   can't spin.
 
-With fix 2 in place, the PnP entry becomes a latency optimisation:
-removing the PnP resync from the fixed model still passes. On pcsc-lite
-2.3.0 and later, feeding the PnP entry's previous `dwEventState` back as its
-`dwCurrentState` would catch reader changes between calls directly, but only
-on that platform.
+What is still not covered:
 
-These fixes are proposals and have not been applied yet. Fix 1
-identifies a card by its ATR, so two cards with the same ATR in the same
-reader can only be told apart by the counter.
+- **Swaps on Windows and macOS.** Fix 1 relies on the event counter, which
+  only pcsc-lite documents for reader entries; Windows uses the PnP entry's
+  high word for the reader count, so the counter is only trusted on Linux
+  (`SMARTCARD_PCSC_COUNTS_CARD_EVENTS` in `src/platform/pcsc.h`). Comparing
+  ATRs instead was rejected: `SCardReconnect` with a reset can change a card's
+  ATR (cold vs warm), which would report a swap that never happened.
+- **A swap through a replugged reader** (`Events-replug`). If a reader is
+  unplugged, plugged back and given a different card between two waits,
+  its restarted counter need not move forward, and the swap is invisible.
+  That takes three physical actions inside the window, so the main property,
+  `CardsConverge`, excuses a replugged reader with a ghost variable until JS
+  is next told an event about it, and `Events-replug` keeps the gap visible.
 
-I did not model a fix for finding 4. One option is an env cleanup hook
+With fix 2 in place the PnP entry is a latency optimisation: removing the
+PnP resync from the model still passes. On pcsc-lite 2.3.0 and later,
+feeding the PnP entry's previous `dwEventState` back as its `dwCurrentState`
+would catch reader changes between calls directly, but only on that
+platform.
+
+There is no fix yet for finding 4. One option is an env cleanup hook
 registered after the tsfn, which runs first because hooks run in reverse
 order, that stops and joins the monitor before Node deletes the tsfn. That
 needs checking against Node's behaviour.
@@ -212,7 +238,7 @@ needs checking against Node's behaviour.
 
 - **Other platforms.** Only pcsc-lite's PC/SC semantics are modelled.
   Windows WinSCard and macOS behave differently around the PnP entry and the
-  event counter.
+  event counter, and may not fail a whole call for an unknown reader.
 - **The service-outage recovery path** in `MonitorEvents`. `MonitorLifecycle`
   has it only abstractly.
 - **The JS layer** (`lib/devices.ts`). One hypothesis worth modelling next:
@@ -226,4 +252,6 @@ needs checking against Node's behaviour.
   scope hypothesis") is that bugs show up at small sizes. Every finding here
   needed 4 steps or fewer.
 - **Finer atomicity.** Each action is indivisible. For example,
-  `UpdateReaderList`'s list-then-query is a single step.
+  `UpdateReaderList`'s list-then-query is a single step, so a reader
+  vanishing between the two (which fails the query; the code then keeps its
+  current map until the next resync) isn't explored.
