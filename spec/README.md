@@ -175,9 +175,10 @@ Node version:
   thread-side push stays a race; TLC's shortest trace takes it.
 - **Node 24.15 and later** keep a tsfn alive while a thread still holds it,
   but run the environment's finalizers while holding the tsfn's own mutex.
-  `~ReaderMonitor`'s `Release()` locks that mutex again, and the process
-  aborts in `uv_mutex_lock`. That happens every time: SIGABRT on macOS
-  with Node 24.22 and a release build. It is
+  `~ReaderMonitor`'s `Release()` locks that mutex again. That fails every
+  time: on macOS the process aborts in `uv_mutex_lock` (SIGABRT, Node
+  24.22, a release build), and on Linux the worker's teardown deadlocks,
+  so the process hangs (CI, Node 24). It is
   [nodejs/node#65100](https://github.com/nodejs/node/issues/65100), fixed
   on Node's main branch by
   [#65967](https://github.com/nodejs/node/pull/65967) but not yet released
