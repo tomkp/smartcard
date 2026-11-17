@@ -9,6 +9,7 @@
 
 using smartcard::CardEvent;
 using smartcard::DetectCardStateChange;
+using smartcard::DetectCardStateChangeAcrossOutage;
 
 // Format a PC/SC error as "message (0xXXXXXXXX)" so the numeric code
 // survives to JS even when only the message string is consumed.
@@ -16,6 +17,26 @@ static std::string FormatPCSCError(LONG code) {
     char hex[16];
     std::snprintf(hex, sizeof(hex), " (0x%08X)", static_cast<unsigned int>(static_cast<DWORD>(code)));
     return std::string(GetPCSCErrorString(code)) + hex;
+}
+
+// The context will never work again (Smart Card service stopped or
+// restarted, dead handle), so release it and re-establish (Issue #119).
+// SCARD_E_INVALID_PARAMETER is deliberately not one: it is a per-call
+// argument error, and recycling a healthy context would re-seed lastState
+// and latch away pending transitions.
+static bool IsContextFatal(LONG result) {
+    DWORD code = static_cast<DWORD>(result);
+    if (code == SCARD_E_SERVICE_STOPPED || code == SCARD_E_NO_SERVICE ||
+        code == SCARD_E_INVALID_HANDLE) {
+        return true;
+    }
+#ifdef _WIN32
+    // WinSCard may report a dead context as the Win32 error instead
+    if (code == ERROR_INVALID_HANDLE) {
+        return true;
+    }
+#endif
+    return false;
 }
 
 // Number of iterations between forced full state refreshes (Windows reliability fix)
@@ -47,7 +68,8 @@ ReaderMonitor::ReaderMonitor(const Napi::CallbackInfo& info)
       contextValid_(false),
       running_(false),
       tsfnActive_(false),
-      cleanupHookAdded_(false) {
+      cleanupHookAdded_(false),
+      outagePending_(false) {
 }
 
 ReaderMonitor::~ReaderMonitor() {
@@ -65,6 +87,12 @@ void ReaderMonitor::Shutdown() {
 
     if (running_) {
         running_ = false;
+
+        // Wake the monitor thread if it is pausing between retries
+        {
+            std::lock_guard<std::mutex> lock(pauseMutex_);
+        }
+        pauseCv_.notify_all();
 
         // Cancel any blocking SCardGetStatusChange call. mutex_ guards
         // context_/contextValid_ against the recovery path swapping them
@@ -96,6 +124,7 @@ void ReaderMonitor::Shutdown() {
     }
 
     readerStates_.clear();
+    outagePending_ = false;
 }
 
 // Node is tearing the environment down (a worker exiting or terminated)
@@ -264,6 +293,31 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
     DWORD pnpCurrentState = SCARD_STATE_UNAWARE;
 
     while (running_ && sessionActive->load()) {
+        // The context died in a service outage and re-establishing it
+        // failed: keep trying, once a second, before anything uses it.
+        // (Waiting on the dead handle instead relied on the error that
+        // returns, which differs by platform: pcsc-lite says
+        // SCARD_E_INVALID_HANDLE, which was in the recovery list below,
+        // but WinSCard may say ERROR_INVALID_HANDLE, which isn't.)
+        if (!contextValid_) {
+            LONG recovered = RecoverContext();
+            if (recovered != SCARD_S_SUCCESS) {
+                // One error event a second while the service is down
+                EmitEvent("error", FormatPCSCError(recovered), 0, {},
+                          static_cast<DWORD>(recovered));
+                // Still down a second after it failed: no reader can be
+                // used, so report them all detached (once). On Windows the
+                // service stops when its last reader is unplugged, so this
+                // is also how that unplug is reported.
+                DetachAllReaders();
+                PauseBeforeRetry(sessionActive);
+                continue;
+            }
+            // The recovery re-listed the readers
+            iterationCount = 0;
+            resyncedForUnknownReader = false;
+        }
+
         // Periodic full resync to handle Windows PC/SC state drift (Issue
         // #111). It re-lists readers too, because under constant card
         // activity the wait may not time out, and the timeout path's
@@ -369,46 +423,20 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
             // consumers); state stays 0 so it keeps its bitmask meaning.
             EmitEvent("error", FormatPCSCError(result), 0, {}, static_cast<DWORD>(result));
 
-            // Context-fatal errors (Smart Card service restart, dead handle):
-            // the existing context will never recover, so retrying it forever
-            // is pointless (Issue #119). Release it and re-establish before
-            // the next iteration. If re-establish fails, the next
-            // SCardGetStatusChange on the zeroed handle fails fast and we
-            // land back here - still one attempt per second.
-            // SCARD_E_INVALID_PARAMETER is deliberately not in this list: it
-            // is a per-call argument error, and recycling a healthy context
-            // would re-seed lastState and latch away pending transitions.
+            // The context is dead: release it. The top of the loop
+            // re-establishes it after the pause - once a second until the
+            // service is back - so there is one recovery path, and it
+            // can't spin.
             DWORD ucode = static_cast<DWORD>(result);
-            if (ucode == SCARD_E_SERVICE_STOPPED ||
-                ucode == SCARD_E_NO_SERVICE ||
-                ucode == SCARD_E_INVALID_HANDLE) {
+            if (IsContextFatal(result)) {
                 // mutex_ also guards context_/contextValid_ against Stop()
-                // and the destructor reading them for SCardCancel.
+                // and the destructor reading them for SCardCancel
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (contextValid_) {
                     SCardReleaseContext(context_);
                     contextValid_ = false;
                 }
                 context_ = 0;
-
-                LONG establishResult = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context_);
-                if (establishResult == SCARD_S_SUCCESS) {
-                    contextValid_ = true;
-                    // JS's own context died in the same outage. Tell it
-                    // first, so it replaces that context before handling
-                    // the card events the resync below may emit (a card
-                    // inserted during the outage is connected on it).
-                    EmitEvent("monitor-recovered", "", 0, {});
-                    // Reader states were tracked against the dead context:
-                    // rebuild, and emit the changes the resync can see. A
-                    // card swapped while the service was down is not one:
-                    // presence is unchanged and pcscd restarts its counters.
-                    ResyncReaderList();
-                } else {
-                    // The error event above already fired this cycle - stay
-                    // at one error event per second while the service is down.
-                    context_ = 0;
-                }
             } else if (ucode == SCARD_E_UNKNOWN_READER) {
                 // Still failing after the re-list above: keep re-listing,
                 // once a second
@@ -416,7 +444,7 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
                 ResyncReaderList();
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            PauseBeforeRetry(sessionActive);
             continue;
         }
 
@@ -448,20 +476,71 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
     }
 }
 
+// Re-establish the context after a service outage. On success tell JS
+// (monitor-recovered), then report what changed during the outage.
+LONG ReaderMonitor::RecoverContext() {
+    // Establish outside mutex_: it can take a while when the service is
+    // starting, and Shutdown() needs mutex_ to cancel
+    SCARDCONTEXT context = 0;
+    LONG result = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context);
+    if (result != SCARD_S_SUCCESS) {
+        return result;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    context_ = context;
+    contextValid_ = true;
+    // JS's own context died in the same outage. Tell it first, so it
+    // replaces that context before handling the card events below.
+    EmitEvent("monitor-recovered", "", 0, {});
+    // Reader states were tracked against the dead context: rebuild them.
+    // Every card handle died too, so each card still in its reader is
+    // reported as replaced, and JS connects to it again. (If the readers
+    // were reported detached during the outage, they are attached again.)
+    ResyncReaderList(true);
+    return SCARD_S_SUCCESS;
+}
+
+// The service is unavailable: report every reader detached and forget
+// them. Recovery's resync attaches whatever is there when it is back.
+void ReaderMonitor::DetachAllReaders() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& pair : readerStates_) {
+        EmitEvent("reader-detached", pair.first, 0, {});
+    }
+    readerStates_.clear();
+    outagePending_ = false;
+}
+
+// The 1 s pause between retries on the error path. Shutdown() cuts it
+// short, so stop(), the destructor and the teardown hook don't wait it out.
+void ReaderMonitor::PauseBeforeRetry(const std::shared_ptr<std::atomic<bool>>& sessionActive) {
+    std::unique_lock<std::mutex> lock(pauseMutex_);
+    pauseCv_.wait_for(lock, std::chrono::milliseconds(1000), [&] {
+        return !running_ || !sessionActive->load();
+    });
+}
+
 // Rebuild readerStates_ and emit the difference: reader-attached/detached
 // for membership changes, card-inserted/removed for presence changes and
 // swaps on surviving readers. Needed because UpdateReaderList re-seeds
 // lastState from a fresh SCARD_STATE_UNAWARE query, which would otherwise
 // silently latch away any transition that happened since the last wait
 // (PnP churn, a vanished reader, a timeout, or a service outage the
-// recovery path just healed). Caller holds mutex_.
-void ReaderMonitor::ResyncReaderList() {
+// recovery path just healed). Caller holds mutex_. acrossOutage: the old
+// states were read before a service outage (see RecoverContext).
+void ReaderMonitor::ResyncReaderList(bool acrossOutage) {
     std::unordered_map<std::string, DWORD> oldStates;
     for (const auto& pair : readerStates_) {
         oldStates[pair.first] = pair.second.lastState;
     }
 
-    UpdateReaderList();
+    bool fresh = UpdateReaderList();
+
+    // Across an outage only a fresh reading shows which cards are still
+    // there; if this one isn't, the next resync owes the comparison
+    acrossOutage = acrossOutage || outagePending_;
+    outagePending_ = acrossOutage && !fresh;
+    bool replaceHeldCards = acrossOutage && fresh;
 
     for (const auto& pair : readerStates_) {
         if (oldStates.find(pair.first) == oldStates.end()) {
@@ -480,25 +559,38 @@ void ReaderMonitor::ResyncReaderList() {
         if (oldIt == oldStates.end()) {
             continue;  // New reader - reader-attached already emitted
         }
-        CardEvent event = DetectCardStateChange(oldIt->second, pair.second.lastState,
-                                                SCARD_STATE_PRESENT,
-                                                SMARTCARD_PCSC_COUNTS_CARD_EVENTS);
+        CardEvent event = replaceHeldCards
+            ? DetectCardStateChangeAcrossOutage(oldIt->second, pair.second.lastState,
+                                                SCARD_STATE_PRESENT)
+            : DetectCardStateChange(oldIt->second, pair.second.lastState,
+                                    SCARD_STATE_PRESENT,
+                                    SMARTCARD_PCSC_COUNTS_CARD_EVENTS);
         EmitCardEvent(event, pair.first, pair.second.lastState, pair.second.atr);
     }
 }
 
-void ReaderMonitor::UpdateReaderList() {
+// Returns whether readerStates_ now comes from a fresh reading (false: it
+// kept what it had, because a call failed)
+bool ReaderMonitor::UpdateReaderList() {
     // Get reader list size
     DWORD readersLen = 0;
     LONG result = SCardListReaders(context_, nullptr, nullptr, &readersLen);
 
-    if (result == static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE) || readersLen == 0) {
+    if (result == static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE)) {
         readerStates_.clear();
-        return;
+        return true;
     }
 
+    // Any other failure (the service went away, say) says nothing about
+    // the readers: keep the map rather than report every reader detached.
+    // readersLen is left untouched on failure, so check this first.
     if (result != SCARD_S_SUCCESS) {
-        return;
+        return false;
+    }
+
+    if (readersLen == 0) {
+        readerStates_.clear();
+        return true;
     }
 
     // Get reader names
@@ -506,7 +598,7 @@ void ReaderMonitor::UpdateReaderList() {
     result = SCardListReaders(context_, nullptr, buffer.data(), &readersLen);
 
     if (result != SCARD_S_SUCCESS) {
-        return;
+        return false;
     }
 
     // Parse multi-string
@@ -529,7 +621,7 @@ void ReaderMonitor::UpdateReaderList() {
         // A listed reader vanished before this read (pcsc-lite rejects the
         // whole call). Keep the current map rather than announce readers
         // with no state; the next resync lists again.
-        return;
+        return false;
     }
     bool seeded = (statusResult == SCARD_S_SUCCESS);
 
@@ -561,6 +653,7 @@ void ReaderMonitor::UpdateReaderList() {
         newStates[newNames[i]] = info;
     }
     readerStates_ = std::move(newStates);
+    return seeded;
 }
 
 void ReaderMonitor::EmitEvent(const std::string& eventType, const std::string& readerName,

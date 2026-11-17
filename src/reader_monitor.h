@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include <condition_variable>
 #include <unordered_map>
 #include "platform/pcsc.h"
 #include "reader_state_utils.h"
@@ -42,6 +43,11 @@ private:
     Napi::ThreadSafeFunction tsfn_;
     bool tsfnActive_;
 
+    // Shutdown() wakes the monitor thread from the pause between retries
+    // on the error path, so stop() needn't wait it out
+    std::mutex pauseMutex_;
+    std::condition_variable pauseCv_;
+
     // OnEnvCleanup is registered with Node from start() until Shutdown()
     bool cleanupHookAdded_;
 
@@ -53,6 +59,10 @@ private:
         std::vector<uint8_t> atr;
     };
     std::unordered_map<std::string, ReaderInfo> readerStates_;
+    // A recovery's resync couldn't read the readers afresh, so the cards
+    // whose handles died in the outage are still to be reported (by the
+    // next resync that can)
+    bool outagePending_;
 
     // JavaScript methods
     Napi::Value Start(const Napi::CallbackInfo& info);
@@ -63,8 +73,11 @@ private:
     void Shutdown();
     static void OnEnvCleanup(void* arg);
     void MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive);
-    void UpdateReaderList();
-    void ResyncReaderList();
+    bool UpdateReaderList();
+    void ResyncReaderList(bool acrossOutage = false);
+    LONG RecoverContext();
+    void DetachAllReaders();
+    void PauseBeforeRetry(const std::shared_ptr<std::atomic<bool>>& sessionActive);
     // code: the PC/SC error code, for "error" events only
     void EmitEvent(const std::string& eventType, const std::string& readerName,
                    DWORD state, const std::vector<uint8_t>& atr, DWORD code = 0);

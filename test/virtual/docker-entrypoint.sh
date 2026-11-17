@@ -10,6 +10,7 @@ cd /work
 npm ci --no-audit --no-fund
 pcscd --disable-polkit
 export SMARTCARD_VIRTUAL_CARD_REQUIRED=1
+export SMARTCARD_TEST_RESTART_PCSCD=1
 if [ "$#" -eq 0 ]; then
     set -- npm run test:virtual
 fi

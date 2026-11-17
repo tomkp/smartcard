@@ -4,6 +4,7 @@
 
 using smartcard::CardEvent;
 using smartcard::DetectCardStateChange;
+using smartcard::DetectCardStateChangeAcrossOutage;
 
 // The production caller passes the platform's SCARD_STATE_PRESENT (0x20 on
 // Windows, macOS, and pcsc-lite); the helper itself is mask-agnostic, which
@@ -112,5 +113,23 @@ TEST_CASE("DetectCardStateChange with a card event counter", "[state]") {
                 == CardEvent::None);
         REQUIRE(DetectCardStateChange(withCount(PRESENT, 1), withCount(PRESENT, 1) | (1ULL << 40), PRESENT, true)
                 == CardEvent::None);
+    }
+}
+
+TEST_CASE("DetectCardStateChangeAcrossOutage", "[state]") {
+    auto withCount = [](uint64_t state, uint64_t count) { return state | (count << 16); };
+
+    SECTION("a card in the reader before and after is replaced: its handle died") {
+        // pcscd restarted with the card still in: counter back to 0
+        REQUIRE(DetectCardStateChangeAcrossOutage(withCount(PRESENT, 3), withCount(PRESENT, 0), PRESENT)
+                == CardEvent::Replaced);
+        // Same counter, presence unchanged: still a dead handle
+        REQUIRE(DetectCardStateChangeAcrossOutage(PRESENT, PRESENT, PRESENT) == CardEvent::Replaced);
+    }
+
+    SECTION("otherwise as without an outage") {
+        REQUIRE(DetectCardStateChangeAcrossOutage(0x00, PRESENT, PRESENT) == CardEvent::Inserted);
+        REQUIRE(DetectCardStateChangeAcrossOutage(withCount(PRESENT, 3), 0x00, PRESENT) == CardEvent::Removed);
+        REQUIRE(DetectCardStateChangeAcrossOutage(0x00, 0x00, PRESENT) == CardEvent::None);
     }
 }

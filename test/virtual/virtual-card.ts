@@ -19,6 +19,12 @@ export const SELECT_RESPONSE = '6a82';
 // then a missing setup fails the tests instead of skipping them
 export const REQUIRED = Boolean(process.env.SMARTCARD_VIRTUAL_CARD_REQUIRED);
 
+// Set (to anything) to let tests stop and start pcscd, to simulate a
+// service outage: as root, or with passwordless sudo. Only where pcscd is
+// started with `pcscd --disable-polkit` rather than by systemd (CI, the
+// Docker image), since the tests start it that way again.
+export const RESTART_PCSCD = Boolean(process.env.SMARTCARD_TEST_RESTART_PCSCD);
+
 const TIMEOUT = 15000;
 
 function readerState(context: PCSCContext): number | null {
@@ -74,7 +80,12 @@ export class VirtualCard {
     }
 
     present(): boolean {
-        const context = new Context();
+        let context: PCSCContext;
+        try {
+            context = new Context();
+        } catch {
+            return false; // no service, so no card
+        }
         try {
             const state = readerState(context);
             return state !== null && (state & SCARD_STATE_PRESENT) !== 0;
@@ -91,21 +102,26 @@ export class VirtualCard {
     async insert(): Promise<void> {
         await this.remove();
         this.output = '';
-        const vicc = spawn('vicc', ['--type', 'iso7816'], { stdio: ['ignore', 'pipe', 'pipe'] });
-        this.vicc = vicc;
-        vicc.stdout?.on('data', (d) => (this.output += d));
-        vicc.stderr?.on('data', (d) => (this.output += d));
-        vicc.on('error', (err) => (this.output += `\n${err.message}`));
-        await waitFor(
-            () => {
-                if (!this.running) {
-                    throw new Error(`vicc exited before the card was inserted:\n${this.log()}`);
-                }
-                return this.present();
-            },
-            'the virtual card to be inserted',
-            () => this.log()
-        );
+        // vicc exits at once if vpcd isn't listening yet (pcscd starting)
+        for (let attempt = 1; ; attempt++) {
+            const vicc = spawn('vicc', ['--type', 'iso7816'], { stdio: ['ignore', 'pipe', 'pipe'] });
+            this.vicc = vicc;
+            vicc.stdout?.on('data', (d) => (this.output += d));
+            vicc.stderr?.on('data', (d) => (this.output += d));
+            vicc.on('error', (err) => (this.output += `\n${err.message}`));
+            await waitFor(
+                () => !this.running || this.present(),
+                'the virtual card to be inserted',
+                () => this.log()
+            );
+            if (this.running) {
+                return;
+            }
+            if (attempt === 3) {
+                throw new Error(`vicc exited before the card was inserted:\n${this.log()}`);
+            }
+            await new Promise((r) => setTimeout(r, 500));
+        }
     }
 
     async remove(): Promise<void> {
@@ -122,3 +138,47 @@ export class VirtualCard {
         await waitFor(() => !this.present(), 'the virtual card to be removed');
     }
 }
+
+function asRoot(command: string[]): number {
+    const argv = process.getuid?.() === 0 ? command : ['sudo', '-n', ...command];
+    return spawnSync(argv[0], argv.slice(1)).status ?? 1;
+}
+
+// pcscd is up with the virtual reader created (so vpcd listens for vicc)
+function readerUp(): boolean {
+    let context: PCSCContext;
+    try {
+        context = new Context();
+    } catch {
+        return false;
+    }
+    try {
+        return readerState(context) !== null;
+    } finally {
+        context.close();
+    }
+}
+
+function pcscdRunning(): boolean {
+    return spawnSync('pgrep', ['-x', 'pcscd']).status === 0;
+}
+
+// Stop and start pcscd (RESTART_PCSCD)
+export const pcscd = {
+    async stop(): Promise<void> {
+        asRoot(['pkill', '-x', 'pcscd']);
+        await waitFor(() => !pcscdRunning(), 'pcscd to stop');
+    },
+    async start(): Promise<void> {
+        if (asRoot(['pcscd', '--disable-polkit']) !== 0) {
+            throw new Error('could not start pcscd');
+        }
+        await waitFor(readerUp, 'pcscd to start');
+    },
+    // Start it again if a test stopped it and failed before restarting it
+    async ensureRunning(): Promise<void> {
+        if (!pcscdRunning()) {
+            await this.start();
+        }
+    },
+};
