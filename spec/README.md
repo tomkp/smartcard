@@ -18,7 +18,7 @@ You need Java 11 or later. `spec/check.sh` runs every config in `cfg/` and
 checks that TLC returns the verdict written on the config's first line. An
 optional second line, `\* Trace:`, gives text the counterexample must contain,
 such as which crash it reaches. It takes about 3 minutes on a laptop and
-about 9 in CI. CI
+5 to 10 in CI. CI
 (`.github/workflows/spec.yml`) runs it when `spec/` changes. On first use,
 `tlc.sh` downloads `tla2tools.jar` v1.7.4 into `.tools/` and checks its
 SHA-256.
