@@ -142,7 +142,11 @@ describe('Card operations (hardware dependent)', () => {
             );
 
             try {
-                const selectCmd = Buffer.from([0xff, 0xca, 0x00, 0x00, 0x00]);
+                // ISO 7816 SELECT with no AID, which contact cards answer
+                // (the virtual card in CI with 6A 82). The reader-level GET
+                // DATA (FF CA) sent before is answered only by contactless
+                // readers, and crashed the virtual card.
+                const selectCmd = Buffer.from([0x00, 0xa4, 0x04, 0x00, 0x00]);
                 const response = await card.transmit(selectCmd);
                 assert(
                     Buffer.isBuffer(response),
