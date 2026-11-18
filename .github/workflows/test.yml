@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [master]
 
+# Nothing here writes to the repository
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -19,6 +23,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js ${{ matrix.node }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -40,12 +46,10 @@ jobs:
           sudo pcscd --disable-polkit
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
-      # Coverage on one job only: if the coverage tool can't run on some
-      # Node version, the tests still do
       - name: Run unit tests
-        run: ${{ matrix.os == 'ubuntu-latest' && matrix.node == 24 && 'npm run test:coverage' || 'npm run test:unit' }}
+        run: npm run test:unit
 
       - name: Run native C++ tests
         run: npm run test:native
@@ -57,6 +61,12 @@ jobs:
           SMARTCARD_VIRTUAL_CARD_REQUIRED: 1
           SMARTCARD_TEST_RESTART_PCSCD: 1
         run: npm run test:virtual
+
+      # Coverage on one job, after its tests: if the coverage tool can't
+      # run, the tests have still run
+      - name: Coverage (Linux, Node 24)
+        if: runner.os == 'Linux' && matrix.node == 24
+        run: npm run test:coverage
 
   # The tests again against an AddressSanitizer build of the addon, for
   # memory errors (use after free, overflows) and LeakSanitizer's leaks.
@@ -73,6 +83,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js ${{ matrix.node }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -90,7 +102,7 @@ jobs:
 
       # Without the install script's plain build of the addon
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Build the addon with AddressSanitizer
         env:

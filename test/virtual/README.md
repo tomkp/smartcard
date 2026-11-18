@@ -46,7 +46,8 @@ builds a copy of the repository, so your own `build/` is left alone:
 
 ```sh
 docker build -t smartcard-virtual test/virtual
-# or with another Node version, e.g. the newest that CI tests:
+# or with another Node version (CI tests the newest 20.x, 22.x, 24.x and 26.x;
+# see https://nodejs.org/dist/ for the version numbers), e.g.:
 # docker build --build-arg NODE_VERSION=26.13.1 -t smartcard-virtual test/virtual
 docker run --rm -v "$PWD":/src:ro smartcard-virtual
 ```
