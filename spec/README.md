@@ -1,24 +1,30 @@
-# smartcard's ReaderMonitor in TLA+
+# smartcard's ReaderMonitor and waitForChange() in TLA+
 
-Two TLA+ specifications of the native `ReaderMonitor`
-([`src/reader_monitor.cpp`](../src/reader_monitor.cpp)), model-checked with
-TLC. `Design = "current"` models the monitor as it is now. `Design = "v3.8"`
-models it as released in smartcard 3.8.0 (`master` at `f3d782e`), where the
-specs found findings 1–4; the line links below point at that commit. When the
-monitor changes, the specs should change in the same PR.
+TLA+ specifications of the native `ReaderMonitor`
+([`src/reader_monitor.cpp`](../src/reader_monitor.cpp)) and of
+`Context.waitForChange()`
+([`src/async_workers.cpp`](../src/async_workers.cpp),
+[`src/pcsc_context.cpp`](../src/pcsc_context.cpp)), model-checked with
+TLC. `Design = "current"` models the code as it is now. For the monitor,
+`Design = "v3.8"` models it as released in smartcard 3.8.0 (`master` at
+`f3d782e`), where the specs found findings 1–4; the line links below point
+at that commit. For `waitForChange()`, `Design = "pre161"` models it as it
+was before #161 (see [waitForChange()](#waitforchange)). When the monitor or
+`waitForChange()` changes, the specs should change in the same PR.
 
 | Spec | Question |
 |---|---|
 | `MonitorLifecycle.tla` | Can `start()`, `stop()`, the destructor or Node's teardown deadlock, hang or crash? Covers the JS thread, the monitor thread, `mutex_`, `SCardCancel` and the thread-safe function (tsfn). |
 | `MonitorEvents.tla` | Is JS told about every reader and card? Covers the monitor loop against pcscd. |
+| `WaitLifecycle.tla` | Do `cancel()` and `close()` end every pending `waitForChange()`, does every call return, and can teardown hang or crash? Covers the JS thread, each wait's thread and PC/SC context, its `mutex_`, `SCardCancel`, pcsc-lite's locks and the wait's tsfn. |
 
 ## Running
 
 You need Java 11 or later. `spec/check.sh` runs every config in `cfg/` and
 checks that TLC returns the verdict written on the config's first line. An
 optional second line, `\* Trace:`, gives text the counterexample must contain,
-such as which crash it reaches. It takes about 3 minutes on a laptop and
-5 to 10 in CI. CI
+such as which crash it reaches. It takes about 8 minutes on a laptop and
+10 to 15 in CI. CI
 (`.github/workflows/spec.yml`) runs it when `spec/` changes. On first use,
 `tlc.sh` downloads `tla2tools.jar` v1.7.4 into `.tools/` and checks its
 SHA-256.
@@ -79,6 +85,14 @@ Two ideas have no counterpart in Z:
 | `Events-v3.8-newreader` | 3.8.0: JS learns about every reader that is plugged in | Violated (finding 2) |
 | `Events-v3.8-gonereader` | 3.8.0: JS learns about every reader that goes away | Violated (finding 3) |
 | `Events-v3.8-deaf` | 3.8.0: JS learns whether each reader holds a card | Violated (finding 3) |
+| `Wait-current` | `waitForChange()` as it is, with 2 waits, `cancel()`, `close()` and `listReaders()`: every call returns, `cancel()` and `close()` end every pending wait, every wait is settled and freed, and no thread blocks holding pcsc-lite's global lock | No errors (120k states) |
+| `Wait-teardown` | The same, with Node tearing the environment down | No errors |
+| `Wait-wide` | The invariants alone, with more of pcscd, a teardown, and `cancel()` giving up after 2 attempts as the code does after 200 | No errors (3M states) |
+| `Wait-giveup` | What if a wait doesn't reach the point where it can be cancelled before `cancel()` stops trying? | Violated: the wait goes on (see [waitForChange()](#waitforchange)) |
+| `Wait-hookorder` | What if `Start()` added its teardown hook before creating the tsfn? | Teardown hangs |
+| `Wait-pre161-cancel` | Before #161: a `cancel()` that comes before the wait begins | Violated: the wait goes on |
+| `Wait-pre161-list` | Before #161: `listReaders()` or `close()` with a wait pending | The JS thread blocks until the wait ends |
+| `Wait-pre161-twowaits` | Before #161: `cancel()` with two waits pending | The JS thread blocks until the first wait ends |
 
 The two pre-#139 configs reproduce, step for step, the two bugs that #139's
 commit message describes. A human reviewer found those bugs; TLC finds them
@@ -325,6 +339,84 @@ Like `stop()`, the teardown hook waits for the monitor thread: normally
 up to the 1 s wait timeout. (The 1 s pause between retries on the error
 path is cut short.) So a worker with a running monitor can take up to a
 second to exit.
+
+## waitForChange()
+
+`WaitLifecycle.tla` models `waitForChange()`, `cancel()`, `close()` and
+`listReaders()` on one `Context`, Node's event loop and environment
+teardown, and the part of pcsc-lite that matters for them. In
+[`src/winscard_clnt.c`](https://github.com/LudovicRousseau/PCSC/blob/master/src/winscard_clnt.c),
+every call takes a global lock. `SCardGetStatusChange` and
+`SCardReleaseContext` then lock their context while still holding it, and
+a wait keeps its context locked for as long as it lasts. `SCardCancel`
+ends a wait only while the wait is blocked on pcscd, which it marks with
+the context's `cancellable` flag. At any other moment, such as while the
+wait is registering with pcscd or comparing reader states, the cancel does
+nothing.
+
+### Before #161
+
+#161 fixed three bugs, found by tests. The model reproduces each one, step
+for step, against `Design = "pre161"` (#158, at `698e2d9`, where every wait
+used the `Context`'s own PC/SC context):
+
+- **A `cancel()` that comes too early is lost** (`Wait-pre161-cancel`).
+  `cancel()` called `SCardCancel` once. If the wait had locked the context
+  but wasn't yet blocked on pcscd, the cancel did nothing, and the wait
+  went on (with no timeout, forever). On macOS `waitForChange();
+  cancel()` did this every time.
+- **`listReaders()` and `close()` block** (`Wait-pre161-list`). Each locks
+  the context the wait holds, so the JS thread waited until the wait
+  ended.
+- **A second wait blocks every PC/SC call** (`Wait-pre161-twowaits`). The
+  second wait's thread blocks on the context's lock while holding the
+  global lock, so `cancel()`, which needs the global lock, blocks the JS
+  thread until the first wait ends: with no timeout, forever.
+
+### The current design
+
+Each wait establishes and releases a PC/SC context of its own, on its own
+thread. `cancel()` and `close()` call `CancelUntilReturned` on each pending
+wait. It sets `cancelled_`, which the wait checks before it calls
+`SCardGetStatusChange`, and calls `SCardCancel` every 5 ms until the wait
+has returned. `Wait-current` and `Wait-teardown` check that:
+
+- every `cancel()`, `close()` and `listReaders()` returns (`JsReturns`)
+- `cancel()` and `close()` end every wait pending at the time
+  (`CancelEnds`)
+- every wait that returns is settled and freed (`Delivered`), and only a
+  cancelled one resolves with `null` (`NullOnlyIfCancelled`)
+- no thread ever blocks holding pcsc-lite's global lock
+  (`GlobalLockFree`), and only a wait locks its own context
+  (`OwnContextsUnshared`), so a pending wait can't hold up any other
+  PC/SC call in the process, the monitor's included
+- `SCardCancel` is never called on a released context (`NoCrash`). PC/SC
+  reuses handle values, so such a call could cancel someone else's wait.
+- at teardown, every wait is cancelled, joined and freed
+  (`TeardownFrees`), and teardown completes (`TeardownReturns`)
+
+`Wait-current` and `Wait-teardown` let the retry go on until the wait
+returns (`MaxAttempts = 0`). The code gives up after 200 attempts, about a
+second, so that `cancel()` can't block the JS thread for longer. The model
+has no clock, so with any limit TLC finds the case where the retries run
+out first (`Wait-giveup`). The wait has read `cancelled_` before `cancel()`
+set it, and is still inside `SCardGetStatusChange`, not yet blocked on
+pcscd, every time `SCardCancel` is called. Then `cancel()` returns, the wait
+goes on, and with no timeout its promise stays pending until a reader or
+card changes. That needs the wait to take more than a second to get from
+`cancelled_` to blocking on pcscd, for instance if pcscd is that slow to
+answer. A teardown has no limit (`OnEnvCleanup` keeps trying), so this
+doesn't affect it.
+
+The order of `Start()`'s teardown hook matters here too
+(`Wait-hookorder`). Added before the tsfn, the tsfn's hook runs first on
+Node 22. It runs `OnDone`, which joins the wait's thread while the wait is
+still blocked, so the teardown hangs until the wait ends on its own.
+
+`WaitLifecycle.tla` leaves out the paths where `Start()` can't add its
+cleanup hook or start a thread (the promise is rejected at once), the GC of
+a `Context` with waits pending, and Node 24's tsfn teardown (see finding
+4). Like the other specs, it models pcsc-lite only.
 
 ## What the model leaves out
 

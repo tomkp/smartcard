@@ -21,8 +21,9 @@ for cfg in cfg/*.cfg; do
     case "$name" in
         Lifecycle-*) spec=MonitorLifecycle.tla ;;
         Events-*) spec=MonitorEvents.tla ;;
+        Wait-*) spec=WaitLifecycle.tla ;;
         *)
-            printf 'FAIL  %-28s name must start with Lifecycle- or Events-\n' "$name"
+            printf 'FAIL  %-28s name must start with Lifecycle-, Events- or Wait-\n' "$name"
             failed=1
             continue
             ;;

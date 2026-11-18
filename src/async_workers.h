@@ -40,6 +40,9 @@
 // blocked the main thread until the wait ended (with no timeout, forever),
 // and a second wait, or a connect(), blocked every PC/SC call in the
 // process, cancel() included.
+//
+// spec/WaitLifecycle.tla models this class, cancel() and close(); change
+// it in the same PR (spec/README.md, "waitForChange()").
 class WaitForChangeWorker {
 public:
     // The waits pending on one Context, for cancel() and close(). Main
