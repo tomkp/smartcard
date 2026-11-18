@@ -2659,18 +2659,66 @@ describe('Devices.start() failure rollback', () => {
             assert.strictEqual(attempts(), 1);
         });
 
-        it('stops trying, and reports it, if a retry fails some other way', (t) => {
+        it('keeps trying, and reports it, if a retry fails some other way', async (t) => {
             t.mock.timers.enable({ apis: ['setTimeout'] });
             const other = new Error('something else');
-            const { devices, errors, attempts } = setup([noService(), other]);
+            const { devices, errors, attached, attempts } = setup([noService(), other]);
             devices.on('error', (err: Error) => errors.push(err));
             devices.start();
             t.mock.timers.tick(1000);
             assert.strictEqual(attempts(), 2);
             assert.strictEqual(errors.length, 2);
             assert.match(errors[1].message, /something else/);
+            t.mock.timers.tick(1000);
+            assert.strictEqual(attempts(), 3);
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.deepStrictEqual(attached, ['Test Reader']);
+            devices.stop();
+        });
+
+        it('keeps trying after a once() error listener has been used up', async (t) => {
+            t.mock.timers.enable({ apis: ['setTimeout'] });
+            const { devices, errors, attached, attempts } = setup([noService(), noService()]);
+            devices.once('error', (err: Error) => errors.push(err));
+            devices.start();
+            t.mock.timers.tick(1000);
+            t.mock.timers.tick(1000);
+            assert.strictEqual(attempts(), 3);
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.deepStrictEqual(attached, ['Test Reader']);
+            assert.strictEqual(errors.length, 1);
+            devices.stop();
+        });
+
+        it('stops trying when an error listener stops it', (t) => {
+            t.mock.timers.enable({ apis: ['setTimeout'] });
+            const { devices, attempts } = setup([noService(), noService()]);
+            devices.on('error', () => devices.stop());
+            devices.start();
             t.mock.timers.tick(5000);
+            assert.strictEqual(attempts(), 1);
+        });
+
+        it('waits once when an error listener restarts it', async (t) => {
+            t.mock.timers.enable({ apis: ['setTimeout'] });
+            const { devices, attached, attempts } = setup([noService(), noService()]);
+            let restarts = 0;
+            devices.on('error', () => {
+                if (restarts++ === 0) {
+                    devices.stop();
+                    devices.start();
+                }
+            });
+            devices.start();
+            // Both start()s failed; one wait is left, not two
             assert.strictEqual(attempts(), 2);
+            t.mock.timers.tick(1000);
+            assert.strictEqual(attempts(), 3);
+            t.mock.timers.tick(5000);
+            assert.strictEqual(attempts(), 3);
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.deepStrictEqual(attached, ['Test Reader']);
+            devices.stop();
         });
 
         it('throws, and does not retry, with no error listener', (t) => {

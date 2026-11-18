@@ -97,6 +97,9 @@ export class Devices extends EventEmitter {
      * (on Windows it stops while no reader is plugged in) and something is
      * listening for errors, report that once and try again every second
      * until it is: from then on, outages are the monitor's to recover from.
+     * Once trying again, keep at it whatever fails, as the monitor does in
+     * an outage, reporting failures other than the service still being
+     * down, until it starts or stop() is called.
      */
     private _startMonitoring(retrying: boolean): void {
         try {
@@ -145,17 +148,24 @@ export class Devices extends EventEmitter {
 
             const error = toPCSCError(err);
             const listening = this.listenerCount('error') > 0;
-            if (listening && error instanceof ServiceNotRunningError) {
-                if (!retrying) {
-                    this.emit('error', error);
-                }
-                this._serviceRetry = setTimeout(() => {
+            const serviceDown = error instanceof ServiceNotRunningError;
+            if (retrying || (listening && serviceDown)) {
+                // Armed before the error is emitted, so that a listener's
+                // stop() cancels it, and its start() doesn't start a second
+                const timer = setTimeout(() => {
+                    if (this._serviceRetry !== timer) {
+                        return;
+                    }
                     this._serviceRetry = null;
                     this._startMonitoring(true);
                 }, SERVICE_RETRY_MS);
+                this._serviceRetry = timer;
+                if (listening && !(retrying && serviceDown)) {
+                    this.emit('error', error);
+                }
             } else if (listening) {
                 this.emit('error', error);
-            } else if (!retrying) {
+            } else {
                 // No listener: fail loudly to the caller instead of
                 // silently doing nothing - but only after the rollback above
                 throw error;
