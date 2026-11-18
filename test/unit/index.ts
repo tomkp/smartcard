@@ -3353,8 +3353,20 @@ describe('waitForChange() arguments', () => {
             ctx.cancel();
             assert.strictEqual(await forever, null);
 
-            const spent: unknown = await Promise.race([ctx.waitForChange(readers, -5), pending(2000)]);
-            assert.deepStrictEqual(spent, []);
+            // Ends at once, not ~49 days later. (With no reader attached,
+            // macOS rejects a zero-timeout wait on the PnP entry with
+            // "Reader unavailable" rather than timing out: either will do.)
+            const spent: unknown = await Promise.race([
+                ctx.waitForChange(readers, -5).then(
+                    (r) => r,
+                    (err: Error) => `rejected: ${err.message}`
+                ),
+                pending(2000),
+            ]);
+            assert(
+                Array.isArray(spent) ? spent.length === 0 : /^rejected/.test(String(spent)),
+                `waitForChange(readers, -5): ${JSON.stringify(spent)}`
+            );
         } finally {
             ctx.cancel();
             ctx.close();
