@@ -4,7 +4,6 @@
 #include "pcsc_napi_error.h"
 #include <chrono>
 #include <cstring>
-#include <system_error>
 
 // ============================================================================
 // WaitForChangeWorker
@@ -59,14 +58,22 @@ Napi::Promise WaitForChangeWorker::Start(
     // From here OnDone frees self
 
     // Added after the tsfn, so that at environment teardown it runs before
-    // the tsfn's own hook: Node runs them newest first
+    // the tsfn's own hook: Node runs them newest first. Without it nothing
+    // could end the wait at teardown, so no wait is started.
     self->cleanupHookAdded_ =
         napi_add_env_cleanup_hook(env, OnEnvCleanup, self) == napi_ok;
 
-    try {
-        self->thread_ = std::thread(&WaitForChangeWorker::Execute, self);
-    } catch (const std::system_error&) {
-        // No thread to be had: fail the wait
+    bool started = false;
+    if (self->cleanupHookAdded_) {
+        try {
+            self->thread_ = std::thread(&WaitForChangeWorker::Execute, self);
+            started = true;
+        } catch (...) {
+            // No thread to be had (std::system_error, std::bad_alloc)
+        }
+    }
+    if (!started) {
+        // Fail the wait: OnDone rejects it
         self->result_ = SCARD_E_NO_MEMORY;
         self->tsfn_.Release();
     }
@@ -101,8 +108,11 @@ void WaitForChangeWorker::OnEnvCleanup(void* arg) {
         {
             std::unique_lock<std::mutex> lock(self->waitedMutex_);
             while (!self->waited_) {
+                lock.unlock();
                 SCardCancel(self->context_);
-                self->waitedCv_.wait_for(lock, std::chrono::milliseconds(10));
+                lock.lock();
+                self->waitedCv_.wait_for(lock, std::chrono::milliseconds(10),
+                                         [self] { return self->waited_; });
             }
         }
         self->thread_.join();
@@ -121,12 +131,24 @@ void WaitForChangeWorker::OnDone(Napi::Env env, void*, WaitForChangeWorker* self
         self->cleanupHookAdded_ = false;
     }
     if (!self->envTornDown_) {
+        // If building the result fails, fail the wait with that error.
         // Node can also finalize the tsfn early in a teardown, before the
-        // cleanup hooks run, when JS can no longer run either: settling
-        // then fails, and the failure must not escape into Node
+        // cleanup hooks run, when JS can't run: then rejecting fails too,
+        // nothing can observe the promise any more, and the failure must
+        // not escape into Node.
         try {
             self->Settle(env);
+        } catch (const Napi::Error& e) {
+            try {
+                self->deferred_.Reject(e.Value());
+            } catch (...) {
+            }
         } catch (...) {
+            try {
+                self->deferred_.Reject(Napi::Error::New(
+                    env, "waitForChange() could not deliver its result").Value());
+            } catch (...) {
+            }
         }
     }
     delete self;

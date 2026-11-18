@@ -2856,6 +2856,11 @@ describe('Worker teardown with native work outstanding', () => {
                     t.skip(`no PC/SC service: ${result.stdout.trim()}`);
                     return;
                 }
+                // A crash or hang fails the test even when the case can't
+                // be set up here
+                const output = `${result.stdout}\n${result.stderr}`;
+                assert.strictEqual(result.signal, null, output);
+                assert.strictEqual(result.status, 0, output);
                 if (
                     (pending === 'queued' || pending === 'waiting') &&
                     result.stdout.includes('no readers')
@@ -2867,10 +2872,7 @@ describe('Worker teardown with native work outstanding', () => {
                     t.skip(`the wait didn't block here: ${result.stdout.trim()}`);
                     return;
                 }
-                const output = `${result.stdout}\n${result.stderr}`;
                 assert.match(result.stdout, /started/, output);
-                assert.strictEqual(result.signal, null, output);
-                assert.strictEqual(result.status, 0, output);
             });
         }
     }
@@ -2891,7 +2893,12 @@ describe('waitForChange() on a thread of its own', () => {
                 close(): void;
             };
         };
-        const count = 2 * (Number(process.env.UV_THREADPOOL_SIZE) || 4);
+        const poolSize = Number(process.env.UV_THREADPOOL_SIZE) || 4;
+        if (poolSize > 16) {
+            t.skip(`UV_THREADPOOL_SIZE is ${poolSize}: too many contexts to outnumber it`);
+            return;
+        }
+        const count = 2 * poolSize;
         const contexts: InstanceType<typeof addon.Context>[] = [];
         try {
             for (let i = 0; i < count; i++) {
@@ -2906,25 +2913,21 @@ describe('waitForChange() on a thread of its own', () => {
             }
             throw err;
         }
-        let settled = 0;
-        const waits = contexts.map((c) =>
-            c.waitForChange(c.listReaders()).then(
-                (r) => {
-                    settled++;
-                    return r;
-                },
-                (e: Error) => {
-                    settled++;
-                    return e;
-                }
-            )
-        );
+        const ended = new Set<number>();
+        const waits: Promise<unknown>[] = [];
         try {
+            contexts.forEach((c, i) => {
+                const end = (r: unknown) => {
+                    ended.add(i);
+                    return r;
+                };
+                waits.push(c.waitForChange(c.listReaders()).then(end, end));
+            });
             const done = await Promise.race([
                 readFile(__filename).then(() => true),
                 new Promise<false>((r) => setTimeout(() => r(false), 2000).unref()),
             ]);
-            if (settled > 0) {
+            if (ended.size > 0) {
                 t.skip(`the waits didn't block here: ${String(await Promise.race(waits))}`);
                 return;
             }
@@ -2932,13 +2935,17 @@ describe('waitForChange() on a thread of its own', () => {
         } finally {
             // Cancel until every wait has ended, so none holds the test
             // process open: a cancel before a wait starts is lost
-            for (let i = 0; i < 100 && settled < count; i++) {
-                contexts.forEach((c) => c.cancel());
+            const pending = () => contexts.filter((_, j) => j < waits.length && !ended.has(j));
+            for (let i = 0; i < 100 && pending().length > 0; i++) {
+                pending().forEach((c) => c.cancel());
                 await new Promise((r) => setTimeout(r, 50));
             }
-            contexts.forEach((c) => c.close());
+            // Closing a context with a wait still pending would block on
+            // pcsc-lite, until the wait ends
+            const stuck = pending();
+            contexts.filter((c) => !stuck.includes(c)).forEach((c) => c.close());
         }
-        assert.strictEqual(settled, count, 'every wait ended once cancelled');
+        assert.strictEqual(ended.size, count, 'every wait ended once cancelled');
     });
 });
 
