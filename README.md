@@ -267,6 +267,10 @@ class Context {
 }
 ```
 
+`waitForChange(readers, timeout)` waits until a reader's state differs from the `state` of the readers you pass: the `Reader` objects from `listReaders()`, or the states a previous call returned. It resolves with each reader's new state; with `[]` if the timeout (in milliseconds) passes first, and with no timeout it waits for ever; or with `null` if it was cancelled before it returned. Called without readers, or with reader names, it reports the current states at once. With no reader attached, it waits for one to be plugged in, and reports a `\\?PnP?\Notification` entry rather than a reader. It rejects on a PC/SC error, such as a reader that has gone, and throws once the context is closed.
+
+Each pending wait uses a PC/SC context of its own, so the context stays usable while it waits: `listReaders()`, connecting its readers, and further waits all work. (On Linux, pcscd serves a limited number of contexts, 200 by default, which also limits how many waits can be pending at once.) `cancel()` ends every wait pending on the context, even one only just started, and returns once they have ended, normally at once. `close()` ends them the same way.
+
 ### Reader
 
 Represents a smart card reader.
@@ -332,6 +336,15 @@ class Devices extends EventEmitter {
     on(event: 'error', listener: (error: Error) => void): this;
 }
 ```
+
+#### Service outages
+
+If the PC/SC service stops while `Devices` is running (pcscd restarting, say, or the Windows Smart Card service, which stops when the last reader is unplugged), `Devices` keeps running and recovers by itself. While the service is down, it emits an `error` about once a second, normally a `ServiceNotRunningError` (see [Error Handling](#error-handling)).
+
+- **The service is back within about a second:** every card still in a reader is reported `card-removed`, then `card-inserted` with a new `Card`. The old `Card`'s connection died with the service. If the restarted service hasn't found its readers again yet, they are reported detached and attached instead, as below.
+- **It stays down longer:** every reader is reported `reader-detached`, with `card-removed` first for its card. When the service returns, the readers are attached again, with their cards.
+
+If the service is already down when you call `start()`, `start()` fails and doesn't retry: it emits `error` (or throws, with no `error` listener), and you can call it again later.
 
 ### Auto GET RESPONSE (T=0 Protocol)
 
