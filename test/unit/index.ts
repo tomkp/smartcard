@@ -3259,3 +3259,126 @@ describe('Addon loaded by several environments', () => {
         }
     });
 });
+
+describe('Reader monitor lifecycles in a worker', () => {
+    // How a monitor ends - stop(), a restart, or GC running its destructor
+    // - and then how its environment ends, in a worker. Mostly for the
+    // sanitizers job in CI, which runs the tests against an ASan build of
+    // the addon: these are the paths that leaked (spec finding 5) or used
+    // freed memory (finding 4) before. ASan checks the addon's own memory
+    // accesses, not a use of memory Node itself freed inside Node, as in
+    // finding 4: that shows only if it crashes. Runs in a child process,
+    // with --expose-gc, which reaches workers too.
+    for (const ending of ['exit', 'terminate'] as const) {
+        it(`survives stop, restart, two monitors and GC, then "${ending}"`, (t) => {
+            const lifecycles = `
+                async function lifecycles(addon, log) {
+                    const tick = (ms) => new Promise((r) => setTimeout(r, ms));
+                    // Stopped, restarted after a tick, and in the same tick
+                    // (a stale tsfn finalizer must not stop the new session)
+                    const m = new addon.ReaderMonitor();
+                    for (let i = 0; i < 2; i++) {
+                        m.start(() => {});
+                        await tick(50);
+                        m.stop();
+                    }
+                    m.start(() => {});
+                    m.stop();
+                    m.start(() => {});
+                    await tick(50);
+                    if (!m.isRunning) {
+                        throw new Error('the monitor restarted in the same tick stopped');
+                    }
+                    // Two at once, one stopped; the other left running
+                    const a = new addon.ReaderMonitor();
+                    const b = new addon.ReaderMonitor();
+                    a.start(() => {});
+                    b.start(() => {});
+                    await tick(50);
+                    a.stop();
+                    // Dropped while running: GC runs its destructor
+                    let collected = false;
+                    const registry = new FinalizationRegistry(() => (collected = true));
+                    (() => {
+                        const dropped = new addon.ReaderMonitor();
+                        dropped.start(() => {});
+                        registry.register(dropped, null);
+                    })();
+                    await tick(50);
+                    for (let i = 0; i < 20 && !collected; i++) {
+                        gc();
+                        await tick(20);
+                    }
+                    if (!collected) {
+                        throw new Error('the dropped monitor was not collected');
+                    }
+                    log('done');
+                    return [m, b];
+                }
+            `;
+            const workerSource = `
+                ${lifecycles}
+                const { parentPort } = require('node:worker_threads');
+                const addon = require(${JSON.stringify(addonPath)});
+                lifecycles(addon, (m) => parentPort.postMessage('worker ' + m)).then(
+                    (running) => {
+                        // Keep the monitors left running until the end
+                        globalThis.running = running;
+                        if (${JSON.stringify(ending)} === 'exit') {
+                            process.exit(0);
+                        }
+                    },
+                    (err) => {
+                        parentPort.postMessage('worker failed: ' + err.message);
+                        process.exit(1);
+                    }
+                );
+            `;
+            // The main thread goes through the same, once (it ends the same
+            // way either time), and stops its monitors: process.exit() runs
+            // no cleanup in the main thread, so they would only race the
+            // PC/SC library's own teardown
+            const mainSource = `
+                ${lifecycles}
+                const { Worker } = require('node:worker_threads');
+                const addon = require(${JSON.stringify(addonPath)});
+                try {
+                    new addon.Context().close();
+                } catch (err) {
+                    if (!${JSON.stringify(NO_SERVICE_CODES)}.includes(err.code)) throw err;
+                    console.log('unavailable: ' + err.message);
+                    process.exit(0);
+                }
+                const worker = new Worker(${JSON.stringify(workerSource)}, { eval: true });
+                worker.on('message', (m) => {
+                    console.log(m);
+                    if (m === 'worker done' && ${JSON.stringify(ending)} === 'terminate') {
+                        worker.terminate();
+                    }
+                });
+                worker.on('exit', async () => {
+                    if (${JSON.stringify(ending)} === 'exit') {
+                        const running = await lifecycles(addon, (m) => console.log('main ' + m));
+                        running.forEach((monitor) => monitor.stop());
+                    }
+                    process.exit(0);
+                });
+            `;
+            const result = spawnSync(process.execPath, ['--expose-gc', '-e', mainSource], {
+                encoding: 'utf-8',
+                timeout: 30000,
+            });
+            if (result.stdout.includes('unavailable: ')) {
+                t.skip(`no PC/SC service: ${result.stdout.trim()}`);
+                return;
+            }
+            const output = `${result.stdout}\n${result.stderr}`;
+            assert.strictEqual(result.signal, null, output);
+            assert.strictEqual(result.status, 0, output);
+            assert.match(result.stdout, /worker done/, output);
+            if (ending === 'exit') {
+                assert.match(result.stdout, /main done/, output);
+            }
+        });
+    }
+});
