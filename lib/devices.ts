@@ -96,7 +96,9 @@ export class Devices extends EventEmitter {
             // they would otherwise land in the new session.
             const generation = this._generation;
             this._monitor.start((event: MonitorEvent) => {
-                this._handleEvent(event, generation);
+                if (generation === this._generation) {
+                    this._handleEvent(event, generation);
+                }
             });
 
             // Set only after everything succeeded, so a partial failure
@@ -177,11 +179,8 @@ export class Devices extends EventEmitter {
      * List currently known readers
      */
     listReaders(): Reader[] {
-        if (!this._running) {
-            return [];
-        }
         try {
-            return this._ensureContext().listReaders();
+            return this._ensureContext()?.listReaders() ?? [];
         } catch {
             return [];
         }
@@ -244,7 +243,7 @@ export class Devices extends EventEmitter {
     ): Promise<void> {
         // Dropped once monitoring stopped, even if it has started again:
         // the event belongs to the earlier session
-        if (!this._running || this._generation !== generation) {
+        if (!this._isCurrent(generation)) {
             return;
         }
 
@@ -252,7 +251,7 @@ export class Devices extends EventEmitter {
 
         switch (type) {
             case 'reader-attached':
-                await this._handleReaderAttached(readerName, state, atr);
+                await this._handleReaderAttached(readerName, state, atr, generation);
                 break;
 
             case 'reader-detached':
@@ -260,7 +259,7 @@ export class Devices extends EventEmitter {
                 break;
 
             case 'card-inserted':
-                await this._handleCardInserted(readerName, state, atr);
+                await this._handleCardInserted(readerName, state, atr, generation);
                 break;
 
             case 'card-removed':
@@ -296,11 +295,11 @@ export class Devices extends EventEmitter {
                 // Dead context - nothing left to release
             }
         }
+        this._context = null;
         try {
-            this._context = new this._Context();
+            this._ensureContext();
         } catch (err) {
             // _ensureContext() tries again when a context is next needed
-            this._context = null;
             this._safeEmitError(err);
         }
     }
@@ -308,13 +307,27 @@ export class Devices extends EventEmitter {
     /**
      * The context for listing readers and connecting cards, created here
      * if replacing it after a service outage failed: one failure must not
-     * leave Devices without a context until it is restarted.
+     * leave Devices without a context until it is restarted. None while
+     * not running, so a handler that outlives its session can't open one.
      */
-    private _ensureContext(): Context {
+    private _ensureContext(): Context | null {
+        if (!this._running) {
+            return null;
+        }
         if (!this._context) {
             this._context = new this._Context();
         }
         return this._context;
+    }
+
+    /**
+     * Whether an event of this generation still belongs to the running
+     * session. A listener can stop (and restart) Devices while a handler
+     * is part-way through, so handlers check again after every emit and
+     * await.
+     */
+    private _isCurrent(generation: number): boolean {
+        return this._running && this._generation === generation;
     }
 
     /**
@@ -323,7 +336,8 @@ export class Devices extends EventEmitter {
     private async _handleReaderAttached(
         readerName: string,
         state: number,
-        atr: Buffer | null
+        atr: Buffer | null,
+        generation: number
     ): Promise<void> {
         // Initialize reader state
         this._readers.set(readerName, {
@@ -342,7 +356,7 @@ export class Devices extends EventEmitter {
 
         // Check if card is already present
         if ((state & this._SCARD_STATE_PRESENT) !== 0) {
-            await this._handleCardInserted(readerName, state, atr);
+            await this._handleCardInserted(readerName, state, atr, generation);
         }
     }
 
@@ -369,8 +383,14 @@ export class Devices extends EventEmitter {
     private async _handleCardInserted(
         readerName: string,
         eventState: number,
-        atr: Buffer | null
+        atr: Buffer | null,
+        generation: number
     ): Promise<void> {
+        // A 'reader-attached' listener may have stopped Devices
+        if (!this._isCurrent(generation)) {
+            return;
+        }
+
         let state = this._readers.get(readerName);
         if (!state) {
             state = { hasCard: false, card: null };
@@ -378,8 +398,6 @@ export class Devices extends EventEmitter {
         }
 
         state.hasCard = true;
-
-        const generation = this._generation;
 
         // Try to connect to the card
         try {
@@ -390,11 +408,11 @@ export class Devices extends EventEmitter {
                 if (attempt > 0) {
                     await new Promise((resolve) => setTimeout(resolve, 50));
                     // Bail if monitoring stopped or restarted while we slept
-                    if (!this._running || this._generation !== generation) {
+                    if (!this._isCurrent(generation)) {
                         return;
                     }
                 }
-                const readers = this._ensureContext().listReaders();
+                const readers = this._ensureContext()?.listReaders() ?? [];
                 reader = readers.find((r) => r.name === readerName);
                 if (reader) {
                     break;
@@ -429,7 +447,7 @@ export class Devices extends EventEmitter {
                 }
             }
 
-            if (!this._running || this._generation !== generation) {
+            if (!this._isCurrent(generation)) {
                 // stop() ran while connect was in flight - it cannot see this
                 // card, so release the handle here
                 try {

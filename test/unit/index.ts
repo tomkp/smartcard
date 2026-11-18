@@ -2795,19 +2795,125 @@ describe('Service outage recovery', () => {
         assert.strictEqual(errors.length, 2);
         assert.strictEqual((errors[1] as Error & { code?: number }).code, 0x8010001d);
 
-        // Devices tries again when it next needs a context
-        assert.deepStrictEqual(
-            devices.listReaders().map((r: { name: string }) => r.name),
-            ['ACR122U']
-        );
+        // Devices tries again when it next needs a context: here, to
+        // connect the next card
         mockMonitor.insertCard('ACR122U', mockCard);
         await new Promise((resolve) => setTimeout(resolve, 100));
         assert.strictEqual(inserted.length, 1);
         assert.strictEqual(errors.length, 2);
         assert.strictEqual(contexts.length, 0);
+        assert.deepStrictEqual(
+            devices.listReaders().map((r: { name: string }) => r.name),
+            ['ACR122U']
+        );
 
         devices.stop();
     });
+
+    // listReaders() recreates a missing context as well
+    it('lists readers again after replacing the context failed', async () => {
+        const mockReader = new MockReader('ACR122U');
+        const deadContext = new MockContext();
+        const liveContext = new MockContext();
+        liveContext.addReader(mockReader);
+        const contexts: (MockContext | Error)[] = [
+            deadContext,
+            Object.assign(new Error('Service not available'), { code: 0x8010001d }),
+            liveContext,
+        ];
+        const mockMonitor = new MockReaderMonitor();
+        const MockDevices = createMockDevices({
+            Context: function () {
+                const next = contexts.shift();
+                if (next instanceof Error) {
+                    throw next;
+                }
+                return next;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+        const devices = new MockDevices();
+        devices.on('error', () => {});
+        devices.start();
+        deadContext.close();
+        mockMonitor.recover();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.deepStrictEqual(
+            devices.listReaders().map((r: { name: string }) => r.name),
+            ['ACR122U']
+        );
+        devices.stop();
+        // Not running: no context
+        assert.deepStrictEqual(devices.listReaders(), []);
+        assert.strictEqual(liveContext.isValid, false);
+    });
+
+    // A listener can stop Devices, or stop and start it, while an event is
+    // still being handled: here, a reader attached with a card in it,
+    // which goes on to connect the card. The rest of that handling belongs
+    // to the stopped session.
+    for (const restart of [false, true]) {
+        it(`a 'reader-attached' listener that ${restart ? 'restarts' : 'stops'} Devices ends the event's handling`, async () => {
+            const mockCard = new MockCard(1, Buffer.from([0x3b]));
+            const mockReader = new MockReader('ACR122U', mockCard);
+            const firstMonitor = new MockReaderMonitor();
+            const secondMonitor = new MockReaderMonitor();
+            firstMonitor.attachReader(mockReader);
+            if (restart) {
+                secondMonitor.attachReader(mockReader);
+            }
+            const monitors = [firstMonitor, secondMonitor];
+            const contexts: MockContext[] = [];
+            const MockDevices = createMockDevices({
+                Context: function () {
+                    const context = new MockContext();
+                    context.addReader(mockReader);
+                    contexts.push(context);
+                    return context;
+                } as unknown as new () => MockContext,
+                ReaderMonitor: function () {
+                    return monitors.shift();
+                } as unknown as new () => MockReaderMonitor,
+            });
+
+            const devices = new MockDevices();
+            const inserted: Card[] = [];
+            const removed: (Card | null)[] = [];
+            devices.on('card-inserted', ({ card }: { card: Card }) => inserted.push(card));
+            devices.on('card-removed', ({ card }: { card: Card | null }) => removed.push(card));
+            devices.once('reader-attached', () => {
+                devices.stop();
+                if (restart) {
+                    devices.start();
+                }
+            });
+            devices.start();
+            await new Promise((resolve) => setTimeout(resolve, 50));
+
+            if (restart) {
+                // Only the new session connects the card
+                assert.strictEqual(inserted.length, 1);
+                assert.strictEqual(mockReader.connectAttempts, 1);
+                assert.strictEqual(contexts.length, 2);
+                devices.stop();
+                assert.strictEqual(mockCard.connected, false, 'stop() disconnected it');
+            } else {
+                assert.strictEqual(inserted.length, 0);
+                assert.strictEqual(mockReader.connectAttempts, 0);
+                assert.strictEqual(contexts.length, 1, 'no context opened after stop()');
+                // Nothing of the stopped session's reader lingers into the
+                // next: a leftover entry with a card would turn this
+                // reader-detached into a card-removed
+                devices.start();
+                secondMonitor.detachReader('ACR122U');
+                await new Promise((resolve) => setTimeout(resolve, 20));
+                assert.deepStrictEqual(removed, []);
+                devices.stop();
+            }
+        });
+    }
 
     // A monitor still delivers the events it queued before stop(). After
     // a stop() and start() in the same tick they used to reach the new
