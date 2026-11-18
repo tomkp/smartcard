@@ -2,6 +2,7 @@
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
 #include "pcsc_napi_error.h"
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 
@@ -116,38 +117,71 @@ void WaitForChangeWorker::Execute() {
             SCardReleaseContext(context_);
             contextValid_ = false;
         }
+        // Cancelled before it returned, even if SCardCancel never reached
+        // it: it resolves with null, whatever ended it
+        if (cancelled_) {
+            result_ = SCARD_E_CANCELLED;
+        }
         waited_ = true;
     }
     waitedCv_.notify_all();
     tsfn_.Release();
 }
 
-void WaitForChangeWorker::CancelUntilReturned(int maxAttempts, int maxFailures) {
-    std::unique_lock<std::mutex> lock(mutex_);
+// Cancelling: SCardCancel ends only a wait in progress. One whose thread
+// hasn't reached SCardGetStatusChange yet sees cancelled_ instead; one that
+// has, but isn't waiting yet, needs another try (SCardCancel succeeds then,
+// doing nothing), so cancel() tries every kCancelRetry for up to
+// kCancelFor. If SCardCancel itself fails for kCancelFailingFor without a
+// break, it gives up: on pcsc-lite it needs a connection of its own to
+// pcscd, which pcscd refuses once it serves its maximum number of contexts
+// (200 by default), and trying for longer only blocks the caller. The
+// teardown hook can't give up, so it backs off to kTeardownRetryMax.
+static const std::chrono::milliseconds kCancelRetry(5);
+static const std::chrono::milliseconds kCancelFor(1000);
+static const std::chrono::milliseconds kCancelFailingFor(100);
+static const std::chrono::milliseconds kTeardownRetryMax(1000);
+
+void WaitForChangeWorker::MarkCancelled() {
+    std::lock_guard<std::mutex> lock(mutex_);
     cancelled_ = true;
-    // SCardCancel ends only a wait in progress. One whose thread hasn't
-    // reached SCardGetStatusChange yet sees cancelled_ instead; one that
-    // has, but isn't waiting yet, needs another try (SCardCancel succeeds
-    // then, doing nothing).
-    int failures = 0;
-    for (int attempt = 0; !waited_ && (maxAttempts == 0 || attempt < maxAttempts); attempt++) {
-        if (contextValid_) {
-            if (SCardCancel(context_) == SCARD_S_SUCCESS) {
-                failures = 0;
-            } else if (maxFailures != 0 && ++failures >= maxFailures) {
-                // SCardCancel itself keeps failing. On pcsc-lite it needs a
-                // connection of its own to pcscd, which pcscd refuses once
-                // it serves its maximum number of contexts (200 by
-                // default): trying for longer only blocks the caller
-                break;
-            }
-        }
-        waitedCv_.wait_for(lock, std::chrono::milliseconds(5), [this] { return waited_; });
-    }
 }
 
-void WaitForChangeWorker::Cancel() {
-    CancelUntilReturned(200, 3);
+bool WaitForChangeWorker::CancelUntilReturned(bool teardown) {
+    using Clock = std::chrono::steady_clock;
+    std::unique_lock<std::mutex> lock(mutex_);
+    cancelled_ = true;
+    const Clock::time_point deadline = Clock::now() + kCancelFor;
+    std::chrono::milliseconds interval = kCancelRetry;
+    bool failing = false;
+    Clock::time_point failingSince;
+    while (!waited_) {
+        if (contextValid_) {
+            if (SCardCancel(context_) == SCARD_S_SUCCESS) {
+                failing = false;
+                interval = kCancelRetry;
+            } else {
+                if (!failing) {
+                    failing = true;
+                    failingSince = Clock::now();
+                }
+                if (teardown) {
+                    interval = std::min(interval * 2, kTeardownRetryMax);
+                } else if (Clock::now() - failingSince >= kCancelFailingFor) {
+                    return false;
+                }
+            }
+        }
+        if (!teardown && Clock::now() >= deadline) {
+            break;
+        }
+        waitedCv_.wait_for(lock, interval, [this] { return waited_; });
+    }
+    return true;
+}
+
+bool WaitForChangeWorker::Cancel() {
+    return CancelUntilReturned(false);
 }
 
 // The environment is being torn down (a worker exiting, or terminated)
@@ -162,7 +196,7 @@ void WaitForChangeWorker::OnEnvCleanup(void* arg) {
     if (self->thread_.joinable()) {
         // However long it takes: the thread must be done before Node
         // frees the tsfn
-        self->CancelUntilReturned(0, 0);
+        self->CancelUntilReturned(true);
         self->thread_.join();
     }
 }

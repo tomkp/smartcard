@@ -54,11 +54,14 @@ public:
                                std::vector<DWORD> currentStates,
                                DWORD timeout);
 
-    // End the wait, whether or not it has begun: one that hasn't returned
-    // yet resolves with null. Returns once it has returned, normally at
-    // once; gives up after about a second if SCardCancel can't end it, or
-    // at once if SCardCancel itself keeps failing. Main thread.
-    void Cancel();
+    // The wait is cancelled: if it hasn't begun it won't, and when it
+    // returns it resolves with null. Cancel() ends it as well. Main thread.
+    void MarkCancelled();
+    // Mark the wait cancelled and end it: returns once it has returned,
+    // normally at once, or after about a second if SCardCancel can't end
+    // it. Returns false, sooner, if SCardCancel itself keeps failing (pcscd
+    // refusing new connections). Main thread.
+    bool Cancel();
 
 private:
     WaitForChangeWorker(Napi::Env env,
@@ -69,10 +72,9 @@ private:
 
     // On thread_: the wait, then releasing tsfn_
     void Execute();
-    // Set cancelled_, then cancel the wait until it has returned, trying
-    // at most maxAttempts times, 5 ms apart, and stopping once SCardCancel
-    // has failed maxFailures times in a row (0: no limit)
-    void CancelUntilReturned(int maxAttempts, int maxFailures);
+    // Set cancelled_, then cancel the wait until it has returned (see
+    // kCancelFor in the .cpp). teardown: for as long as it takes
+    bool CancelUntilReturned(bool teardown);
     // The tsfn's finalizer, on the main thread: Node calls it once
     // Execute() has released the tsfn, or at environment teardown
     static void OnDone(Napi::Env env, void*, WaitForChangeWorker* self);
