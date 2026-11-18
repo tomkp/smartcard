@@ -19,7 +19,8 @@ Napi::Object PCSCContext::Init(Napi::Env env, Napi::Object exports) {
 }
 
 PCSCContext::PCSCContext(const Napi::CallbackInfo& info)
-    : Napi::ObjectWrap<PCSCContext>(info) {
+    : Napi::ObjectWrap<PCSCContext>(info),
+      pendingWaits_(std::make_shared<WaitForChangeWorker::PendingWaits>()) {
 
     Napi::Env env = info.Env();
 
@@ -172,27 +173,27 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
     }
 
     return WaitForChangeWorker::Start(
-        env, info.This().As<Napi::Object>(), context, std::move(readerNames),
+        env, info.This().As<Napi::Object>(), pendingWaits_, std::move(readerNames),
         std::move(currentStates), timeout);
 }
 
+// Ends every waitForChange() pending on this context: each resolves with
+// null. A wait has a context of its own, so this works even once close()
+// has released this one.
 Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
-    Napi::Env env = info.Env();
-
-    if (!IsValid()) {
-        return env.Undefined();
+    for (WaitForChangeWorker* wait : *pendingWaits_) {
+        wait->Cancel();
     }
-
-    LONG result = SCardCancel(handle_->Get());
-    if (result != SCARD_S_SUCCESS && result != static_cast<LONG>(SCARD_E_INVALID_HANDLE)) {
-        NewPCSCError(env, result).ThrowAsJavaScriptException();
-    }
-
-    return env.Undefined();
+    return info.Env().Undefined();
 }
 
 Napi::Value PCSCContext::Close(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
+
+    // Pending waits end as cancelled (null)
+    for (WaitForChangeWorker* wait : *pendingWaits_) {
+        wait->Cancel();
+    }
 
     // Release now, even if readers or cards still hold the handle: they
     // see it as invalid from here on and stop using it

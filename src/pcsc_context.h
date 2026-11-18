@@ -5,6 +5,7 @@
 #include <vector>
 #include "platform/pcsc.h"
 #include "pcsc_context_handle.h"
+#include "async_workers.h"
 
 class PCSCContext : public Napi::ObjectWrap<PCSCContext> {
 public:
@@ -20,6 +21,10 @@ private:
     // Shared with the Readers (and their Cards) created from this context;
     // released when the last of them is finalized, or by close()
     ContextHandlePtr handle_;
+
+    // waitForChange() calls still pending, each on a context of its own:
+    // cancel() and close() end them
+    WaitForChangeWorker::PendingWaitsPtr pendingWaits_;
 
     // JavaScript-exposed methods
     Napi::Value ListReaders(const Napi::CallbackInfo& info);

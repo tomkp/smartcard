@@ -6,6 +6,8 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <memory>
+#include <unordered_set>
 #include "platform/pcsc.h"
 #include "pcsc_context_handle.h"
 
@@ -29,20 +31,36 @@
 //   and nor did the process, whose exit waits for its workers.
 // Off the threadpool the wait doesn't hold up teardown, and OnEnvCleanup
 // cancels it.
+//
+// Each wait also has a PC/SC context of its own. pcsc-lite holds a
+// context's lock for as long as a wait on it lasts, and a call that needs
+// the lock waits for it while holding the library's global lock: on the
+// waiting Context, listReaders() and close() blocked the main thread until
+// the wait ended (with no timeout, forever), and a second wait, or a
+// connect(), blocked every PC/SC call in the process, cancel() included.
 class WaitForChangeWorker {
 public:
+    // The waits pending on one Context, for cancel() and close(). Main
+    // thread only; shared by the Context and its waits.
+    using PendingWaits = std::unordered_set<WaitForChangeWorker*>;
+    using PendingWaitsPtr = std::shared_ptr<PendingWaits>;
+
     // Start the wait; returns the promise it settles
     static Napi::Promise Start(Napi::Env env,
                                Napi::Object owner,
-                               SCARDCONTEXT context,
+                               PendingWaitsPtr pendingWaits,
                                std::vector<std::string> readerNames,
                                std::vector<DWORD> currentStates,
                                DWORD timeout);
 
+    // End the wait (it resolves with null), whether or not it has begun.
+    // Main thread.
+    void Cancel();
+
 private:
     WaitForChangeWorker(Napi::Env env,
                         Napi::Object owner,
-                        SCARDCONTEXT context,
+                        PendingWaitsPtr pendingWaits,
                         std::vector<std::string> readerNames,
                         std::vector<DWORD> currentStates,
                         DWORD timeout);
@@ -60,17 +78,23 @@ private:
 
     Napi::ObjectReference ownerRef_;
     Napi::Promise::Deferred deferred_;
+    PendingWaitsPtr pendingWaits_;
+    // This wait's own context: established in Start(), released in OnDone
     SCARDCONTEXT context_;
+    bool contextValid_;
     std::vector<std::string> readerNames_;
     std::vector<SCARD_READERSTATE> states_;
     DWORD timeout_;
     LONG result_;
     DoneTsfn tsfn_;
     std::thread thread_;
+    // Guards cancelled_ and waited_
+    std::mutex mutex_;
     // Execute() has returned from SCardGetStatusChange
-    std::mutex waitedMutex_;
     std::condition_variable waitedCv_;
     bool waited_;
+    // Cancel() or OnEnvCleanup: end the wait, or don't begin it
+    bool cancelled_;
     // OnEnvCleanup is registered with Node from Start() until OnDone
     bool cleanupHookAdded_;
     // OnEnvCleanup ran: the environment can't run JS any more

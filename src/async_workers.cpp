@@ -9,20 +9,28 @@
 // WaitForChangeWorker
 // ============================================================================
 
+// The wait runs in slices of at most this long: SCardCancel ends only a
+// wait in progress, so a cancel that comes before the wait has begun is
+// lost, and the wait sees cancelled_ at the next slice instead
+static const DWORD kWaitSliceMs = 1000;
+
 WaitForChangeWorker::WaitForChangeWorker(
     Napi::Env env,
     Napi::Object owner,
-    SCARDCONTEXT context,
+    PendingWaitsPtr pendingWaits,
     std::vector<std::string> readerNames,
     std::vector<DWORD> currentStates,
     DWORD timeout)
     : ownerRef_(Napi::Persistent(owner)),
       deferred_(Napi::Promise::Deferred::New(env)),
-      context_(context),
+      pendingWaits_(std::move(pendingWaits)),
+      context_(0),
+      contextValid_(false),
       readerNames_(std::move(readerNames)),
       timeout_(timeout),
       result_(SCARD_S_SUCCESS),
       waited_(false),
+      cancelled_(false),
       cleanupHookAdded_(false),
       envTornDown_(false) {
 
@@ -38,13 +46,14 @@ WaitForChangeWorker::WaitForChangeWorker(
 Napi::Promise WaitForChangeWorker::Start(
     Napi::Env env,
     Napi::Object owner,
-    SCARDCONTEXT context,
+    PendingWaitsPtr pendingWaits,
     std::vector<std::string> readerNames,
     std::vector<DWORD> currentStates,
     DWORD timeout) {
 
     auto* self = new WaitForChangeWorker(
-        env, owner, context, std::move(readerNames), std::move(currentStates), timeout);
+        env, owner, std::move(pendingWaits), std::move(readerNames),
+        std::move(currentStates), timeout);
     Napi::Promise promise = self->deferred_.Promise();
 
     try {
@@ -63,28 +72,67 @@ Napi::Promise WaitForChangeWorker::Start(
     self->cleanupHookAdded_ =
         napi_add_env_cleanup_hook(env, OnEnvCleanup, self) == napi_ok;
 
+    // Out of threads, or memory, unless a context can't be had
+    LONG failure = SCARD_E_NO_MEMORY;
     bool started = false;
     if (self->cleanupHookAdded_) {
+        failure = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &self->context_);
+        self->contextValid_ = failure == SCARD_S_SUCCESS;
+    }
+    if (self->contextValid_) {
         try {
+            // Within cancel()'s reach before it begins
+            self->pendingWaits_->insert(self);
             self->thread_ = std::thread(&WaitForChangeWorker::Execute, self);
             started = true;
         } catch (...) {
             // No thread to be had (std::system_error, std::bad_alloc)
+            self->pendingWaits_->erase(self);
+            failure = SCARD_E_NO_MEMORY;
         }
     }
     if (!started) {
         // Fail the wait: OnDone rejects it
-        self->result_ = SCARD_E_NO_MEMORY;
+        self->result_ = failure;
         self->tsfn_.Release();
     }
 
     return promise;
 }
 
-void WaitForChangeWorker::Execute() {
-    result_ = SCardGetStatusChange(context_, timeout_, states_.data(), states_.size());
+void WaitForChangeWorker::Cancel() {
     {
-        std::lock_guard<std::mutex> lock(waitedMutex_);
+        std::lock_guard<std::mutex> lock(mutex_);
+        cancelled_ = true;
+    }
+    // Ends the wait now if it is in progress; if it hasn't begun, it sees
+    // cancelled_ instead
+    SCardCancel(context_);
+}
+
+void WaitForChangeWorker::Execute() {
+    DWORD remaining = timeout_;
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (cancelled_) {
+                result_ = SCARD_E_CANCELLED;
+                break;
+            }
+        }
+        DWORD slice = remaining > kWaitSliceMs ? kWaitSliceMs : remaining;
+        result_ = SCardGetStatusChange(context_, slice, states_.data(), states_.size());
+        // Nothing changed in this slice: wait again, unless the timeout
+        // is used up (INFINITE never is)
+        if (result_ != static_cast<LONG>(SCARD_E_TIMEOUT) || slice == remaining) {
+            break;
+        }
+        if (remaining != INFINITE) {
+            remaining -= slice;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
         waited_ = true;
     }
     waitedCv_.notify_all();
@@ -101,12 +149,12 @@ void WaitForChangeWorker::OnEnvCleanup(void* arg) {
     self->cleanupHookAdded_ = false;
     self->envTornDown_ = true;
     if (self->thread_.joinable()) {
-        // SCardCancel ends only a wait in progress, not one whose thread
-        // hasn't reached SCardGetStatusChange yet, so cancel until this
-        // one has returned. Waits on this context all belong to this
-        // environment, so they are all ending anyway.
+        // Cancel until the wait has returned: a slice ends it anyway, but
+        // retrying sooner catches a wait that had not begun at the first
+        // SCardCancel
         {
-            std::unique_lock<std::mutex> lock(self->waitedMutex_);
+            std::unique_lock<std::mutex> lock(self->mutex_);
+            self->cancelled_ = true;
             while (!self->waited_) {
                 lock.unlock();
                 SCardCancel(self->context_);
@@ -129,6 +177,13 @@ void WaitForChangeWorker::OnDone(Napi::Env env, void*, WaitForChangeWorker* self
     if (self->cleanupHookAdded_) {
         napi_remove_env_cleanup_hook(env, OnEnvCleanup, self);
         self->cleanupHookAdded_ = false;
+    }
+    // Out of the Context's reach before the context goes, so cancel()
+    // never reaches a released handle
+    self->pendingWaits_->erase(self);
+    if (self->contextValid_) {
+        SCardReleaseContext(self->context_);
+        self->contextValid_ = false;
     }
     if (!self->envTornDown_) {
         // If building the result fails, fail the wait with that error.
