@@ -170,30 +170,39 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
                 }
             }
         }
+        if (result != SCARD_S_SUCCESS &&
+            result != static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE)) {
+            // No list to wait on: a wait on no readers would return at
+            // once, as if it had timed out
+            Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
+            deferred.Reject(NewPCSCError(env, result).Value());
+            return deferred.Promise();
+        }
     }
 
     return WaitForChangeWorker::Start(
-        env, info.This().As<Napi::Object>(), pendingWaits_, std::move(readerNames),
-        std::move(currentStates), timeout);
+        env, pendingWaits_, std::move(readerNames), std::move(currentStates), timeout);
 }
 
-// Ends every waitForChange() pending on this context: each resolves with
-// null. A wait has a context of its own, so this works even once close()
-// has released this one.
-Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
+void PCSCContext::CancelPendingWaits() {
     for (WaitForChangeWorker* wait : *pendingWaits_) {
         wait->Cancel();
     }
+}
+
+// Ends every waitForChange() pending on this context: one that hasn't
+// returned yet resolves with null. A wait has a context of its own, so
+// this works even once close() has released this one.
+Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
+    CancelPendingWaits();
     return info.Env().Undefined();
 }
 
 Napi::Value PCSCContext::Close(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    // Pending waits end as cancelled (null)
-    for (WaitForChangeWorker* wait : *pendingWaits_) {
-        wait->Cancel();
-    }
+    // Pending waits end as if cancelled
+    CancelPendingWaits();
 
     // Release now, even if readers or cards still hold the handle: they
     // see it as invalid from here on and stop using it

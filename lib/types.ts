@@ -126,14 +126,14 @@ export interface Context {
     ): Promise<ReaderState[] | null>;
 
     /**
-     * Cancel every waitForChange() pending on this context: each resolves
-     * with null
+     * Cancel every waitForChange() pending on this context: each that
+     * hasn't returned yet resolves with null
      */
     cancel(): void;
 
     /**
      * Close the context and release resources. Pending waitForChange()
-     * calls resolve with null, as if cancelled.
+     * calls end as if cancelled.
      */
     close(): void;
 }

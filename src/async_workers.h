@@ -11,13 +11,14 @@
 #include "platform/pcsc.h"
 #include "pcsc_context_handle.h"
 
-// Every worker holds a Napi::ObjectReference to the JS object that owns its
-// PC/SC handle (Card, Reader, or Context). Without it, GC can finalize the
-// owner while Execute() is blocked in a PC/SC call: the finalizer disconnects
-// or releases the handle out from under the worker, and PC/SC reuses handle
-// values, so a late call can even land on a different card. The reference is
-// released on the main thread once the result is delivered (OnOK/OnError;
-// for WaitForChangeWorker, OnDone), or at environment teardown.
+// Every AsyncWorker below holds a Napi::ObjectReference to the JS object
+// that owns its PC/SC handle (Card or Reader). Without it, GC can finalize
+// the owner while Execute() is blocked in a PC/SC call: the finalizer
+// disconnects or releases the handle out from under the worker, and PC/SC
+// reuses handle values, so a late call can even land on a different card.
+// The reference is released on the main thread once the result is
+// delivered (OnOK/OnError). WaitForChangeWorker needs none: its context is
+// its own.
 
 // waitForChange(): SCardGetStatusChange on a thread of its own, not as a
 // Napi::AsyncWorker on libuv's threadpool, because the wait can last
@@ -32,12 +33,13 @@
 // Off the threadpool the wait doesn't hold up teardown, and OnEnvCleanup
 // cancels it.
 //
-// Each wait also has a PC/SC context of its own. pcsc-lite holds a
-// context's lock for as long as a wait on it lasts, and a call that needs
-// the lock waits for it while holding the library's global lock: on the
-// waiting Context, listReaders() and close() blocked the main thread until
-// the wait ended (with no timeout, forever), and a second wait, or a
-// connect(), blocked every PC/SC call in the process, cancel() included.
+// Each wait also has a PC/SC context of its own, established and released
+// on its thread. pcsc-lite holds a context's lock for as long as a wait on
+// it lasts, and a call that needs the lock waits for it while holding the
+// library's global lock: on the waiting Context, listReaders() and close()
+// blocked the main thread until the wait ended (with no timeout, forever),
+// and a second wait, or a connect(), blocked every PC/SC call in the
+// process, cancel() included.
 class WaitForChangeWorker {
 public:
     // The waits pending on one Context, for cancel() and close(). Main
@@ -47,19 +49,19 @@ public:
 
     // Start the wait; returns the promise it settles
     static Napi::Promise Start(Napi::Env env,
-                               Napi::Object owner,
                                PendingWaitsPtr pendingWaits,
                                std::vector<std::string> readerNames,
                                std::vector<DWORD> currentStates,
                                DWORD timeout);
 
-    // End the wait (it resolves with null), whether or not it has begun.
+    // End the wait, whether or not it has begun: one that hasn't returned
+    // yet resolves with null. Returns once it has returned, normally at
+    // once; gives up after about a second if SCardCancel can't end it.
     // Main thread.
     void Cancel();
 
 private:
     WaitForChangeWorker(Napi::Env env,
-                        Napi::Object owner,
                         PendingWaitsPtr pendingWaits,
                         std::vector<std::string> readerNames,
                         std::vector<DWORD> currentStates,
@@ -67,6 +69,9 @@ private:
 
     // On thread_: the wait, then releasing tsfn_
     void Execute();
+    // Set cancelled_, then cancel the wait until it has returned, trying
+    // at most maxAttempts times, 5 ms apart (0: no limit)
+    void CancelUntilReturned(int maxAttempts);
     // The tsfn's finalizer, on the main thread: Node calls it once
     // Execute() has released the tsfn, or at environment teardown
     static void OnDone(Napi::Env env, void*, WaitForChangeWorker* self);
@@ -76,21 +81,20 @@ private:
     // Only ever released, never called: OnDone delivers the result
     using DoneTsfn = Napi::TypedThreadSafeFunction<WaitForChangeWorker>;
 
-    Napi::ObjectReference ownerRef_;
     Napi::Promise::Deferred deferred_;
     PendingWaitsPtr pendingWaits_;
-    // This wait's own context: established in Start(), released in OnDone
-    SCARDCONTEXT context_;
-    bool contextValid_;
     std::vector<std::string> readerNames_;
     std::vector<SCARD_READERSTATE> states_;
     DWORD timeout_;
     LONG result_;
     DoneTsfn tsfn_;
     std::thread thread_;
-    // Guards cancelled_ and waited_
+    // Guards the rest
     std::mutex mutex_;
-    // Execute() has returned from SCardGetStatusChange
+    // This wait's own context, while thread_ holds it
+    SCARDCONTEXT context_;
+    bool contextValid_;
+    // Execute() is done with the context: the wait has returned
     std::condition_variable waitedCv_;
     bool waited_;
     // Cancel() or OnEnvCleanup: end the wait, or don't begin it

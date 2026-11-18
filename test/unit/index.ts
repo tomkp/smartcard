@@ -3157,17 +3157,11 @@ describe('waitForChange() on a thread of its own', () => {
             }
             assert(done, `with ${count} waits pending, readFile() didn't finish within 2 s`);
         } finally {
-            // Cancel until every wait has ended, so none holds the test
-            // process open: a cancel before a wait starts is lost
-            const pending = () => contexts.filter((_, j) => j < waits.length && !ended.has(j));
-            for (let i = 0; i < 100 && pending().length > 0; i++) {
-                pending().forEach((c) => c.cancel());
-                await new Promise((r) => setTimeout(r, 50));
-            }
-            // Closing a context with a wait still pending would block on
-            // pcsc-lite, until the wait ends
-            const stuck = pending();
-            contexts.filter((c) => !stuck.includes(c)).forEach((c) => c.close());
+            contexts.forEach((c) => c.cancel());
+            await Promise.race([Promise.all(waits), new Promise((r) => setTimeout(r, 5000))]);
+            // A context whose wait is still pending isn't closed: if
+            // cancel() broke, closing it would block on pcsc-lite
+            contexts.forEach((c, j) => (ended.has(j) || j >= waits.length) && c.close());
         }
         assert.strictEqual(ended.size, count, 'every wait ended once cancelled');
     });
@@ -3220,6 +3214,25 @@ describe('waitForChange() alongside other calls on its Context', () => {
              c.cancel();
              console.log('wait: ' + JSON.stringify(await within(p, 3000)));`,
             /^wait: null$/m,
+        ],
+        [
+            // Some of these land after the wait's thread has entered
+            // SCardGetStatusChange but before the call can be cancelled,
+            // which one SCardCancel misses
+            'ends a wait cancelled at any moment as it begins',
+            `const spin = (ms) => {
+                 const end = performance.now() + ms;
+                 while (performance.now() < end);
+             };
+             let lost = 0;
+             for (let i = 0; i < 200; i++) {
+                 const p = c.waitForChange(readers);
+                 spin(i * 0.01);
+                 c.cancel();
+                 if ((await within(p, 2000)) !== null) lost++;
+             }
+             console.log('lost: ' + lost);`,
+            /^lost: 0$/m,
         ],
         [
             'answers listReaders() and close() while a wait is pending, and close() ends it',

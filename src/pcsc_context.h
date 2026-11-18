@@ -26,6 +26,8 @@ private:
     // cancel() and close() end them
     WaitForChangeWorker::PendingWaitsPtr pendingWaits_;
 
+    void CancelPendingWaits();
+
     // JavaScript-exposed methods
     Napi::Value ListReaders(const Napi::CallbackInfo& info);
     Napi::Value WaitForChange(const Napi::CallbackInfo& info);
