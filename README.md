@@ -267,7 +267,9 @@ class Context {
 }
 ```
 
-`waitForChange()` resolves with the readers' new states, with `[]` when the timeout passes (none means wait forever), or with `null` when cancelled. Each pending wait has a PC/SC connection of its own, so the context stays usable meanwhile: `listReaders()`, `connect()` and further waits all work. `cancel()` ends every wait pending on the context, even one that has only just been called, and `close()` ends them the same way.
+`waitForChange(readers, timeout)` waits until a reader's state differs from the `state` of the readers you pass: the `Reader` objects from `listReaders()`, or the states a previous call returned. It resolves with each reader's new state; with `[]` if the timeout (in milliseconds) passes first, and with no timeout it waits for ever; or with `null` if it was cancelled before it returned. Called without readers, or with reader names, it reports the current states at once. With no reader attached, it waits for one to be plugged in, and reports a `\\?PnP?\Notification` entry rather than a reader. It rejects on a PC/SC error, such as a reader that has gone, and throws once the context is closed.
+
+Each pending wait uses a PC/SC context of its own, so the context stays usable while it waits: `listReaders()`, connecting its readers, and further waits all work. (On Linux, pcscd serves a limited number of contexts, 200 by default, which also limits how many waits can be pending at once.) `cancel()` ends every wait pending on the context, even one only just started, and returns once they have ended, normally at once. `close()` ends them the same way.
 
 ### Reader
 
@@ -337,10 +339,12 @@ class Devices extends EventEmitter {
 
 #### Service outages
 
-If the PC/SC service stops (pcscd restarting, say, or the Windows Smart Card service, which stops when the last reader is unplugged), `Devices` keeps running, reports the outage through `error` events, and recovers by itself:
+If the PC/SC service stops while `Devices` is running (pcscd restarting, say, or the Windows Smart Card service, which stops when the last reader is unplugged), `Devices` keeps running and recovers by itself. While the service is down, it emits an `error` about once a second, normally a `ServiceNotRunningError` (see [Error Handling](#error-handling)).
 
-- **The service is back within about a second:** every card still in a reader is reported `card-removed`, then `card-inserted` with a new `Card`. The old `Card`'s connection died with the service.
+- **The service is back within about a second:** every card still in a reader is reported `card-removed`, then `card-inserted` with a new `Card`. The old `Card`'s connection died with the service. If the restarted service hasn't found its readers again yet, they are reported detached and attached instead, as below.
 - **It stays down longer:** every reader is reported `reader-detached`, with `card-removed` first for its card. When the service returns, the readers are attached again, with their cards.
+
+If the service is already down when you call `start()`, `start()` fails and doesn't retry: it emits `error` (or throws, with no `error` listener), and you can call it again later.
 
 ### Auto GET RESPONSE (T=0 Protocol)
 
