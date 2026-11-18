@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
@@ -2764,10 +2765,14 @@ describe('Worker teardown with native work outstanding', () => {
     // - queued: the monitor's first events still undelivered, because the
     //   worker blocks its event loop
     // - waiting: a waitForChange() still in flight
-    // The last two crashed in the delivery: the call into the dying
+    // - waiting forever: a waitForChange() with no timeout
+    // queued and waiting crashed in the delivery: the call into the dying
     // environment failed, and node-addon-api rethrew that into Node
     // (std::terminate). They need a reader, to have something to deliver.
-    type Pending = 'running' | 'queued' | 'waiting';
+    // Waiting forever hung instead, and a terminated worker never exited:
+    // Node waits for threadpool work before teardown, and the wait was
+    // threadpool work.
+    type Pending = 'running' | 'queued' | 'waiting' | 'waiting forever';
     type Ending = 'exit' | 'terminate';
 
     function runWorker(pending: Pending, ending: Ending) {
@@ -2783,6 +2788,13 @@ describe('Worker teardown with native work outstanding', () => {
                 readers = context.listReaders();
                 if (pending === 'waiting') {
                     context.waitForChange(readers, 1000).then(() => {}, () => {});
+                } else if (pending === 'waiting forever') {
+                    // Blocks until a reader changes (with no reader, until
+                    // one is attached)
+                    context.waitForChange(readers).then(
+                        (r) => parentPort.postMessage('returned at once: ' + JSON.stringify(r)),
+                        (e) => parentPort.postMessage('returned at once: ' + e.message)
+                    );
                 } else {
                     new addon.ReaderMonitor().start(() => {});
                 }
@@ -2793,7 +2805,15 @@ describe('Worker teardown with native work outstanding', () => {
                 );
                 context = undefined;
             }
-            if (context !== undefined) {
+            if (context !== undefined && pending === 'waiting forever') {
+                // Make sure the wait is pending before the worker ends
+                setTimeout(() => {
+                    parentPort.postMessage('started');
+                    if (ending === 'exit') {
+                        process.exit(0);
+                    }
+                }, 200);
+            } else if (context !== undefined) {
                 parentPort.postMessage(readers.length > 0 ? 'started' : 'started, no readers');
                 if (pending === 'queued') {
                     // Never let the event loop deliver the monitor's events:
@@ -2826,26 +2846,107 @@ describe('Worker teardown with native work outstanding', () => {
         running: 'its monitor still running',
         queued: 'monitor events not yet delivered',
         waiting: 'waitForChange() in flight',
+        'waiting forever': 'waitForChange() with no timeout pending',
     };
-    for (const pending of ['running', 'queued', 'waiting'] as const) {
+    for (const pending of ['running', 'queued', 'waiting', 'waiting forever'] as const) {
         for (const ending of ['exit', 'terminate'] as const) {
-            it(`does not crash when the worker ends with "${ending}" with ${titles[pending]}`, (t) => {
+            it(`does not crash or hang when the worker ends with "${ending}" with ${titles[pending]}`, (t) => {
                 const result = runWorker(pending, ending);
                 if (result.stdout.includes('unavailable: ')) {
                     t.skip(`no PC/SC service: ${result.stdout.trim()}`);
                     return;
                 }
-                if (pending !== 'running' && result.stdout.includes('no readers')) {
+                // A crash or hang fails the test even when the case can't
+                // be set up here
+                const output = `${result.stdout}\n${result.stderr}`;
+                assert.strictEqual(result.signal, null, output);
+                assert.strictEqual(result.status, 0, output);
+                if (
+                    (pending === 'queued' || pending === 'waiting') &&
+                    result.stdout.includes('no readers')
+                ) {
                     t.skip('no reader, so nothing to deliver');
                     return;
                 }
-                const output = `${result.stdout}\n${result.stderr}`;
+                if (result.stdout.includes('returned at once')) {
+                    t.skip(`the wait didn't block here: ${result.stdout.trim()}`);
+                    return;
+                }
                 assert.match(result.stdout, /started/, output);
-                assert.strictEqual(result.signal, null, output);
-                assert.strictEqual(result.status, 0, output);
             });
         }
     }
+});
+
+describe('waitForChange() on a thread of its own', () => {
+    // Each pending wait used to hold one of the threads of libuv's
+    // threadpool, which the whole process shares (4 by default), so a
+    // few of them stopped all fs, dns, crypto and zlib work until one
+    // returned.
+    it('leaves the threadpool free while waits are pending', async (t) => {
+        type Reader = { name: string; state: number };
+        const addon = require(addonPath) as {
+            Context: new () => {
+                listReaders(): Reader[];
+                waitForChange(readers: Reader[]): Promise<unknown>;
+                cancel(): void;
+                close(): void;
+            };
+        };
+        const poolSize = Number(process.env.UV_THREADPOOL_SIZE) || 4;
+        if (poolSize > 16) {
+            t.skip(`UV_THREADPOOL_SIZE is ${poolSize}: too many contexts to outnumber it`);
+            return;
+        }
+        const count = 2 * poolSize;
+        const contexts: InstanceType<typeof addon.Context>[] = [];
+        try {
+            for (let i = 0; i < count; i++) {
+                contexts.push(new addon.Context());
+            }
+        } catch (err) {
+            contexts.forEach((c) => c.close());
+            const code = (err as { code?: number }).code;
+            if (code !== undefined && NO_SERVICE_CODES.includes(code)) {
+                t.skip(`no PC/SC service: ${(err as Error).message}`);
+                return;
+            }
+            throw err;
+        }
+        const ended = new Set<number>();
+        const waits: Promise<unknown>[] = [];
+        try {
+            contexts.forEach((c, i) => {
+                const end = (r: unknown) => {
+                    ended.add(i);
+                    return r;
+                };
+                waits.push(c.waitForChange(c.listReaders()).then(end, end));
+            });
+            const done = await Promise.race([
+                readFile(__filename).then(() => true),
+                new Promise<false>((r) => setTimeout(() => r(false), 2000).unref()),
+            ]);
+            if (ended.size > 0) {
+                t.skip(`the waits didn't block here: ${String(await Promise.race(waits))}`);
+                return;
+            }
+            assert(done, `with ${count} waits pending, readFile() didn't finish within 2 s`);
+        } finally {
+            // Cancel until every wait has ended, so none holds the test
+            // process open: a cancel before a wait starts is lost
+            const pending = () => contexts.filter((_, j) => j < waits.length && !ended.has(j));
+            for (let i = 0; i < 100 && pending().length > 0; i++) {
+                pending().forEach((c) => c.cancel());
+                await new Promise((r) => setTimeout(r, 50));
+            }
+            // Closing a context with a wait still pending would block on
+            // pcsc-lite, until the wait ends
+            const stuck = pending();
+            contexts.filter((c) => !stuck.includes(c)).forEach((c) => c.close());
+        }
+        assert.strictEqual(ended.size, count, 'every wait ended once cancelled');
+    });
 });
 
 describe('Idle reader monitor', () => {

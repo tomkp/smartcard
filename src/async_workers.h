@@ -3,6 +3,9 @@
 #include <napi.h>
 #include <vector>
 #include <string>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 #include "platform/pcsc.h"
 #include "pcsc_context_handle.h"
 
@@ -11,31 +14,67 @@
 // owner while Execute() is blocked in a PC/SC call: the finalizer disconnects
 // or releases the handle out from under the worker, and PC/SC reuses handle
 // values, so a late call can even land on a different card. The reference is
-// released when the worker is destroyed on the main thread after OnOK/OnError.
+// released on the main thread once the result is delivered (OnOK/OnError;
+// for WaitForChangeWorker, OnDone), or at environment teardown.
 
-// Async worker for SCardGetStatusChange
-class WaitForChangeWorker : public Napi::AsyncWorker {
+// waitForChange(): SCardGetStatusChange on a thread of its own, not as a
+// Napi::AsyncWorker on libuv's threadpool, because the wait can last
+// forever (with no timeout, the default):
+// - The threadpool is shared by the whole process, 4 threads by default.
+//   Four pending waits stopped every fs, dns, crypto and zlib call, and
+//   this addon's transmit() and connect(), until one of them returned.
+// - Node tears an environment down (a worker exiting, or terminated) only
+//   once its threadpool work has finished, and runs cleanup hooks only
+//   after that, so nothing could cancel the wait: the worker never ended,
+//   and nor did the process, whose exit waits for its workers.
+// Off the threadpool the wait doesn't hold up teardown, and OnEnvCleanup
+// cancels it.
+class WaitForChangeWorker {
 public:
+    // Start the wait; returns the promise it settles
+    static Napi::Promise Start(Napi::Env env,
+                               Napi::Object owner,
+                               SCARDCONTEXT context,
+                               std::vector<std::string> readerNames,
+                               std::vector<DWORD> currentStates,
+                               DWORD timeout);
+
+private:
     WaitForChangeWorker(Napi::Env env,
                         Napi::Object owner,
                         SCARDCONTEXT context,
                         std::vector<std::string> readerNames,
                         std::vector<DWORD> currentStates,
-                        DWORD timeout,
-                        Napi::Promise::Deferred deferred);
+                        DWORD timeout);
 
-    void Execute() override;
-    void OnOK() override;
-    void OnError(const Napi::Error& error) override;
+    // On thread_: the wait, then releasing tsfn_
+    void Execute();
+    // The tsfn's finalizer, on the main thread: Node calls it once
+    // Execute() has released the tsfn, or at environment teardown
+    static void OnDone(Napi::Env env, void*, WaitForChangeWorker* self);
+    static void OnEnvCleanup(void* arg);
+    void Settle(Napi::Env env);
 
-private:
+    // Only ever released, never called: OnDone delivers the result
+    using DoneTsfn = Napi::TypedThreadSafeFunction<WaitForChangeWorker>;
+
     Napi::ObjectReference ownerRef_;
+    Napi::Promise::Deferred deferred_;
     SCARDCONTEXT context_;
     std::vector<std::string> readerNames_;
     std::vector<SCARD_READERSTATE> states_;
     DWORD timeout_;
     LONG result_;
-    Napi::Promise::Deferred deferred_;
+    DoneTsfn tsfn_;
+    std::thread thread_;
+    // Execute() has returned from SCardGetStatusChange
+    std::mutex waitedMutex_;
+    std::condition_variable waitedCv_;
+    bool waited_;
+    // OnEnvCleanup is registered with Node from Start() until OnDone
+    bool cleanupHookAdded_;
+    // OnEnvCleanup ran: the environment can't run JS any more
+    bool envTornDown_;
 };
 
 // Async worker for SCardTransmit
