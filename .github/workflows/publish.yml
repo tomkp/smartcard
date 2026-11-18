@@ -1,0 +1,64 @@
+name: Publish
+
+# Publishing a GitHub release publishes the package to npm. To release:
+#   1. merge a PR that bumps the version in package.json and
+#      package-lock.json (npm version <x.y.z> --no-git-tag-version);
+#   2. publish a GitHub release whose tag is v<x.y.z>, targeting that
+#      commit. A pre-release goes to npm's `next` dist-tag, not `latest`.
+#
+# npm authenticates this workflow by trusted publishing (OIDC), so no
+# token is stored. It must be set up once on npmjs.com, under the
+# package's Settings > Trusted publishing: GitHub Actions, owner tomkp,
+# repository smartcard, workflow publish.yml.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  # Trusted publishing, and the provenance statement npm attaches
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the release's tag
+        uses: actions/checkout@v4
+
+      - name: Check the tag matches package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Release tag $GITHUB_REF_NAME doesn't match package.json's version $version"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later
+      - name: Update npm
+        run: npm install -g npm@^11.5.1
+
+      # The install script and prepublishOnly build the addon
+      - name: Install PC/SC headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcsclite-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Publish to npm
+        env:
+          DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
+        run: npm publish --provenance --access public --tag "$DIST_TAG"
