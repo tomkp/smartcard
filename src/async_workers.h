@@ -56,8 +56,8 @@ public:
 
     // End the wait, whether or not it has begun: one that hasn't returned
     // yet resolves with null. Returns once it has returned, normally at
-    // once; gives up after about a second if SCardCancel can't end it.
-    // Main thread.
+    // once; gives up after about a second if SCardCancel can't end it, or
+    // at once if SCardCancel itself keeps failing. Main thread.
     void Cancel();
 
 private:
@@ -70,8 +70,9 @@ private:
     // On thread_: the wait, then releasing tsfn_
     void Execute();
     // Set cancelled_, then cancel the wait until it has returned, trying
-    // at most maxAttempts times, 5 ms apart (0: no limit)
-    void CancelUntilReturned(int maxAttempts);
+    // at most maxAttempts times, 5 ms apart, and stopping once SCardCancel
+    // has failed maxFailures times in a row (0: no limit)
+    void CancelUntilReturned(int maxAttempts, int maxFailures);
     // The tsfn's finalizer, on the main thread: Node calls it once
     // Execute() has released the tsfn, or at environment teardown
     static void OnDone(Napi::Env env, void*, WaitForChangeWorker* self);

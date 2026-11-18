@@ -122,22 +122,32 @@ void WaitForChangeWorker::Execute() {
     tsfn_.Release();
 }
 
-void WaitForChangeWorker::CancelUntilReturned(int maxAttempts) {
+void WaitForChangeWorker::CancelUntilReturned(int maxAttempts, int maxFailures) {
     std::unique_lock<std::mutex> lock(mutex_);
     cancelled_ = true;
     // SCardCancel ends only a wait in progress. One whose thread hasn't
     // reached SCardGetStatusChange yet sees cancelled_ instead; one that
-    // has, but isn't waiting yet, needs another try.
+    // has, but isn't waiting yet, needs another try (SCardCancel succeeds
+    // then, doing nothing).
+    int failures = 0;
     for (int attempt = 0; !waited_ && (maxAttempts == 0 || attempt < maxAttempts); attempt++) {
         if (contextValid_) {
-            SCardCancel(context_);
+            if (SCardCancel(context_) == SCARD_S_SUCCESS) {
+                failures = 0;
+            } else if (maxFailures != 0 && ++failures >= maxFailures) {
+                // SCardCancel itself keeps failing. On pcsc-lite it needs a
+                // connection of its own to pcscd, which pcscd refuses once
+                // it serves its maximum number of contexts (200 by
+                // default): trying for longer only blocks the caller
+                break;
+            }
         }
         waitedCv_.wait_for(lock, std::chrono::milliseconds(5), [this] { return waited_; });
     }
 }
 
 void WaitForChangeWorker::Cancel() {
-    CancelUntilReturned(200);
+    CancelUntilReturned(200, 3);
 }
 
 // The environment is being torn down (a worker exiting, or terminated)
@@ -150,7 +160,9 @@ void WaitForChangeWorker::OnEnvCleanup(void* arg) {
     self->cleanupHookAdded_ = false;
     self->envTornDown_ = true;
     if (self->thread_.joinable()) {
-        self->CancelUntilReturned(0);
+        // However long it takes: the thread must be done before Node
+        // frees the tsfn
+        self->CancelUntilReturned(0, 0);
         self->thread_.join();
     }
 }
