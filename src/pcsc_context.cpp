@@ -205,8 +205,18 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
 }
 
 void PCSCContext::CancelPendingWaits() {
+    // All marked first, so that none still starting begins (and takes one
+    // of pcscd's contexts) while the others are being cancelled
     for (WaitForChangeWorker* wait : *pendingWaits_) {
-        wait->Cancel();
+        wait->MarkCancelled();
+    }
+    for (WaitForChangeWorker* wait : *pendingWaits_) {
+        if (!wait->Cancel()) {
+            // SCardCancel keeps failing: pcscd is refusing new connections,
+            // and would for the rest too. They resolve with null whenever
+            // they next return.
+            break;
+        }
     }
 }
 
@@ -221,14 +231,15 @@ Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
 Napi::Value PCSCContext::Close(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    // Pending waits end as if cancelled
-    CancelPendingWaits();
-
     // Release now, even if readers or cards still hold the handle: they
-    // see it as invalid from here on and stop using it
+    // see it as invalid from here on and stop using it. First, as it frees
+    // one of pcscd's contexts, which cancelling the waits may need.
     if (handle_) {
         handle_->Release();
     }
+
+    // Pending waits end as if cancelled
+    CancelPendingWaits();
 
     return env.Undefined();
 }
