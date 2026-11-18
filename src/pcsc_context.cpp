@@ -171,15 +171,9 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
         }
     }
 
-    // Create promise and start async worker
-    Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-
-    WaitForChangeWorker* worker = new WaitForChangeWorker(
-        env, info.This().As<Napi::Object>(), context, readerNames, currentStates,
-        timeout, deferred);
-    worker->Queue();
-
-    return deferred.Promise();
+    return WaitForChangeWorker::Start(
+        env, info.This().As<Napi::Object>(), context, std::move(readerNames),
+        std::move(currentStates), timeout);
 }
 
 Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
