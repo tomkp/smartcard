@@ -3157,20 +3157,118 @@ describe('waitForChange() on a thread of its own', () => {
             }
             assert(done, `with ${count} waits pending, readFile() didn't finish within 2 s`);
         } finally {
-            // Cancel until every wait has ended, so none holds the test
-            // process open: a cancel before a wait starts is lost
-            const pending = () => contexts.filter((_, j) => j < waits.length && !ended.has(j));
-            for (let i = 0; i < 100 && pending().length > 0; i++) {
-                pending().forEach((c) => c.cancel());
-                await new Promise((r) => setTimeout(r, 50));
-            }
-            // Closing a context with a wait still pending would block on
-            // pcsc-lite, until the wait ends
-            const stuck = pending();
-            contexts.filter((c) => !stuck.includes(c)).forEach((c) => c.close());
+            contexts.forEach((c) => c.cancel());
+            await Promise.race([Promise.all(waits), new Promise((r) => setTimeout(r, 5000))]);
+            // A context whose wait is still pending isn't closed: if
+            // cancel() broke, closing it would block on pcsc-lite
+            contexts.forEach((c, j) => (ended.has(j) || j >= waits.length) && c.close());
         }
         assert.strictEqual(ended.size, count, 'every wait ended once cancelled');
     });
+});
+
+describe('waitForChange() alongside other calls on its Context', () => {
+    // Each case runs in a child process: before the fix, on pcsc-lite, it
+    // blocked the main thread for good. Every wait used the Context's own
+    // PC/SC context, whose lock pcsc-lite holds for as long as a wait
+    // lasts, and a call that wanted the lock waited for it holding the
+    // library's global lock. And a cancel() that came before the wait had
+    // begun was lost, on every platform.
+    function runCase(scenario: string) {
+        const source = `
+            const addon = require(${JSON.stringify(addonPath)});
+            const tick = (ms) => new Promise((r) => setTimeout(r, ms));
+            const within = (p, ms) =>
+                Promise.race([p, tick(ms).then(() => 'still pending')]);
+            (async () => {
+                let c;
+                try {
+                    c = new addon.Context();
+                } catch (err) {
+                    if (!${JSON.stringify(NO_SERVICE_CODES)}.includes(err.code)) throw err;
+                    console.log('unavailable: ' + err.message);
+                    return;
+                }
+                const readers = c.listReaders();
+                // Only meaningful where a wait blocks: one that times out
+                const probe = await c.waitForChange(readers, 100);
+                if (probe === null || probe.length > 0) {
+                    console.log('returned at once: ' + JSON.stringify(probe));
+                    c.close();
+                    return;
+                }
+                ${scenario}
+                process.exit(0);
+            })().catch((err) => {
+                console.log('failed: ' + err.message);
+                process.exit(1);
+            });
+        `;
+        return spawnSync(process.execPath, ['-e', source], { encoding: 'utf-8', timeout: 15000 });
+    }
+
+    const cases: [string, string, RegExp][] = [
+        [
+            'ends a wait cancelled before it began',
+            `const p = c.waitForChange(readers);
+             c.cancel();
+             console.log('wait: ' + JSON.stringify(await within(p, 3000)));`,
+            /^wait: null$/m,
+        ],
+        [
+            // Some of these land after the wait's thread has entered
+            // SCardGetStatusChange but before the call can be cancelled,
+            // which one SCardCancel misses
+            'ends a wait cancelled at any moment as it begins',
+            `const spin = (ms) => {
+                 const end = performance.now() + ms;
+                 while (performance.now() < end);
+             };
+             let lost = 0;
+             for (let i = 0; i < 200; i++) {
+                 const p = c.waitForChange(readers);
+                 spin(i * 0.01);
+                 c.cancel();
+                 if ((await within(p, 2000)) !== null) lost++;
+             }
+             console.log('lost: ' + lost);`,
+            /^lost: 0$/m,
+        ],
+        [
+            'answers listReaders() and close() while a wait is pending, and close() ends it',
+            `const p = c.waitForChange(readers);
+             await tick(100);
+             console.log('listReaders: ' + c.listReaders().length);
+             c.close();
+             console.log('wait: ' + JSON.stringify(await within(p, 3000)));`,
+            /^listReaders: \d+\nwait: null$/m,
+        ],
+        [
+            'runs two waits at once, and one cancel() ends both',
+            `const both = Promise.all([c.waitForChange(readers), c.waitForChange(readers)]);
+             await tick(100);
+             c.cancel();
+             console.log('waits: ' + JSON.stringify(await within(both, 3000)));`,
+            /^waits: \[null,null\]$/m,
+        ],
+    ];
+    for (const [title, scenario, expected] of cases) {
+        it(title, (t) => {
+            const result = runCase(scenario);
+            if (result.stdout.includes('unavailable: ')) {
+                t.skip(`no PC/SC service: ${result.stdout.trim()}`);
+                return;
+            }
+            const output = `${result.stdout}\n${result.stderr}`;
+            assert.strictEqual(result.signal, null, output);
+            assert.strictEqual(result.status, 0, output);
+            if (result.stdout.includes('returned at once')) {
+                t.skip(`a wait doesn't block here: ${result.stdout.trim()}`);
+                return;
+            }
+            assert.match(result.stdout, expected, output);
+        });
+    }
 });
 
 describe('Idle reader monitor', () => {

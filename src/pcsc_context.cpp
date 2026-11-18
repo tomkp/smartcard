@@ -19,7 +19,8 @@ Napi::Object PCSCContext::Init(Napi::Env env, Napi::Object exports) {
 }
 
 PCSCContext::PCSCContext(const Napi::CallbackInfo& info)
-    : Napi::ObjectWrap<PCSCContext>(info) {
+    : Napi::ObjectWrap<PCSCContext>(info),
+      pendingWaits_(std::make_shared<WaitForChangeWorker::PendingWaits>()) {
 
     Napi::Env env = info.Env();
 
@@ -169,30 +170,39 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
                 }
             }
         }
+        if (result != SCARD_S_SUCCESS &&
+            result != static_cast<LONG>(SCARD_E_NO_READERS_AVAILABLE)) {
+            // No list to wait on: a wait on no readers would return at
+            // once, as if it had timed out
+            Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
+            deferred.Reject(NewPCSCError(env, result).Value());
+            return deferred.Promise();
+        }
     }
 
     return WaitForChangeWorker::Start(
-        env, info.This().As<Napi::Object>(), context, std::move(readerNames),
-        std::move(currentStates), timeout);
+        env, pendingWaits_, std::move(readerNames), std::move(currentStates), timeout);
 }
 
+void PCSCContext::CancelPendingWaits() {
+    for (WaitForChangeWorker* wait : *pendingWaits_) {
+        wait->Cancel();
+    }
+}
+
+// Ends every waitForChange() pending on this context: one that hasn't
+// returned yet resolves with null. A wait has a context of its own, so
+// this works even once close() has released this one.
 Napi::Value PCSCContext::Cancel(const Napi::CallbackInfo& info) {
-    Napi::Env env = info.Env();
-
-    if (!IsValid()) {
-        return env.Undefined();
-    }
-
-    LONG result = SCardCancel(handle_->Get());
-    if (result != SCARD_S_SUCCESS && result != static_cast<LONG>(SCARD_E_INVALID_HANDLE)) {
-        NewPCSCError(env, result).ThrowAsJavaScriptException();
-    }
-
-    return env.Undefined();
+    CancelPendingWaits();
+    return info.Env().Undefined();
 }
 
 Napi::Value PCSCContext::Close(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
+
+    // Pending waits end as if cancelled
+    CancelPendingWaits();
 
     // Release now, even if readers or cards still hold the handle: they
     // see it as invalid from here on and stop using it

@@ -11,18 +11,19 @@
 
 WaitForChangeWorker::WaitForChangeWorker(
     Napi::Env env,
-    Napi::Object owner,
-    SCARDCONTEXT context,
+    PendingWaitsPtr pendingWaits,
     std::vector<std::string> readerNames,
     std::vector<DWORD> currentStates,
     DWORD timeout)
-    : ownerRef_(Napi::Persistent(owner)),
-      deferred_(Napi::Promise::Deferred::New(env)),
-      context_(context),
+    : deferred_(Napi::Promise::Deferred::New(env)),
+      pendingWaits_(std::move(pendingWaits)),
       readerNames_(std::move(readerNames)),
       timeout_(timeout),
       result_(SCARD_S_SUCCESS),
+      context_(0),
+      contextValid_(false),
       waited_(false),
+      cancelled_(false),
       cleanupHookAdded_(false),
       envTornDown_(false) {
 
@@ -37,14 +38,14 @@ WaitForChangeWorker::WaitForChangeWorker(
 
 Napi::Promise WaitForChangeWorker::Start(
     Napi::Env env,
-    Napi::Object owner,
-    SCARDCONTEXT context,
+    PendingWaitsPtr pendingWaits,
     std::vector<std::string> readerNames,
     std::vector<DWORD> currentStates,
     DWORD timeout) {
 
     auto* self = new WaitForChangeWorker(
-        env, owner, context, std::move(readerNames), std::move(currentStates), timeout);
+        env, std::move(pendingWaits), std::move(readerNames),
+        std::move(currentStates), timeout);
     Napi::Promise promise = self->deferred_.Promise();
 
     try {
@@ -66,10 +67,13 @@ Napi::Promise WaitForChangeWorker::Start(
     bool started = false;
     if (self->cleanupHookAdded_) {
         try {
+            // Within cancel()'s reach before it begins
+            self->pendingWaits_->insert(self);
             self->thread_ = std::thread(&WaitForChangeWorker::Execute, self);
             started = true;
         } catch (...) {
             // No thread to be had (std::system_error, std::bad_alloc)
+            self->pendingWaits_->erase(self);
         }
     }
     if (!started) {
@@ -82,13 +86,58 @@ Napi::Promise WaitForChangeWorker::Start(
 }
 
 void WaitForChangeWorker::Execute() {
-    result_ = SCardGetStatusChange(context_, timeout_, states_.data(), states_.size());
+    SCARDCONTEXT context = 0;
+    LONG established = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context);
+    bool cancelled;
     {
-        std::lock_guard<std::mutex> lock(waitedMutex_);
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (established == SCARD_S_SUCCESS) {
+            context_ = context;
+            contextValid_ = true;
+        }
+        cancelled = cancelled_;
+    }
+
+    if (established != SCARD_S_SUCCESS) {
+        result_ = established;
+    } else if (cancelled) {
+        result_ = SCARD_E_CANCELLED;
+    } else {
+        // One call, however long: separate calls would leave gaps between
+        // them, in which pcsc-lite misses a reader being added (the PnP
+        // entry counts only during a call) and fails the next call
+        // outright for a reader removed (spec/README.md, findings 2 and 3)
+        result_ = SCardGetStatusChange(context, timeout_, states_.data(), states_.size());
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (contextValid_) {
+            SCardReleaseContext(context_);
+            contextValid_ = false;
+        }
         waited_ = true;
     }
     waitedCv_.notify_all();
     tsfn_.Release();
+}
+
+void WaitForChangeWorker::CancelUntilReturned(int maxAttempts) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cancelled_ = true;
+    // SCardCancel ends only a wait in progress. One whose thread hasn't
+    // reached SCardGetStatusChange yet sees cancelled_ instead; one that
+    // has, but isn't waiting yet, needs another try.
+    for (int attempt = 0; !waited_ && (maxAttempts == 0 || attempt < maxAttempts); attempt++) {
+        if (contextValid_) {
+            SCardCancel(context_);
+        }
+        waitedCv_.wait_for(lock, std::chrono::milliseconds(5), [this] { return waited_; });
+    }
+}
+
+void WaitForChangeWorker::Cancel() {
+    CancelUntilReturned(200);
 }
 
 // The environment is being torn down (a worker exiting, or terminated)
@@ -101,24 +150,9 @@ void WaitForChangeWorker::OnEnvCleanup(void* arg) {
     self->cleanupHookAdded_ = false;
     self->envTornDown_ = true;
     if (self->thread_.joinable()) {
-        // SCardCancel ends only a wait in progress, not one whose thread
-        // hasn't reached SCardGetStatusChange yet, so cancel until this
-        // one has returned. Waits on this context all belong to this
-        // environment, so they are all ending anyway.
-        {
-            std::unique_lock<std::mutex> lock(self->waitedMutex_);
-            while (!self->waited_) {
-                lock.unlock();
-                SCardCancel(self->context_);
-                lock.lock();
-                self->waitedCv_.wait_for(lock, std::chrono::milliseconds(10),
-                                         [self] { return self->waited_; });
-            }
-        }
+        self->CancelUntilReturned(0);
         self->thread_.join();
     }
-    // While the environment can still delete references
-    self->ownerRef_.Reset();
 }
 
 void WaitForChangeWorker::OnDone(Napi::Env env, void*, WaitForChangeWorker* self) {
@@ -130,6 +164,7 @@ void WaitForChangeWorker::OnDone(Napi::Env env, void*, WaitForChangeWorker* self
         napi_remove_env_cleanup_hook(env, OnEnvCleanup, self);
         self->cleanupHookAdded_ = false;
     }
+    self->pendingWaits_->erase(self);
     if (!self->envTornDown_) {
         // If building the result fails, fail the wait with that error.
         // Node can also finalize the tsfn early in a teardown, before the
