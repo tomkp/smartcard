@@ -121,7 +121,7 @@ export interface Context {
      * Wait for reader/card state changes
      */
     waitForChange(
-        readers?: Reader[] | ReaderState[],
+        readers?: Reader[] | ReaderState[] | null,
         timeout?: number
     ): Promise<ReaderState[] | null>;
 
