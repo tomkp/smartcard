@@ -19,10 +19,6 @@ import {
     toPCSCError,
 } from './errors';
 
-// How often start() tries again while the PC/SC service isn't running, as
-// the native monitor does during an outage
-const SERVICE_RETRY_MS = 1000;
-
 const addon = require('../../build/Release/smartcard_napi.node') as NativeAddon;
 
 interface ReaderStateInternal {
@@ -47,8 +43,6 @@ export class Devices extends EventEmitter {
     private _monitor: ReaderMonitor | null = null;
     private _context: Context | null = null;
     private _running = false;
-    // start() is waiting for the PC/SC service to run
-    private _serviceRetry: ReturnType<typeof setTimeout> | null = null;
     private _readers = new Map<string, ReaderStateInternal>();
     private _eventQueue: Promise<void> = Promise.resolve();
     private _generation = 0;
@@ -81,30 +75,34 @@ export class Devices extends EventEmitter {
 
     /**
      * Start monitoring for device changes. If the PC/SC service isn't
-     * running, it emits a ServiceNotRunningError and keeps trying every
-     * second until the service is up (or stop() is called); without an
-     * 'error' listener it throws instead.
+     * running yet, it waits for it as it does during an outage, emitting
+     * an 'error' about once a second until it is; without an 'error'
+     * listener it throws instead.
      */
     start(): void {
-        if (this._running || this._serviceRetry !== null) {
+        if (this._running) {
             return;
         }
-        this._startMonitoring(false);
-    }
 
-    /**
-     * One attempt to start monitoring. If the PC/SC service isn't running
-     * (on Windows it stops while no reader is plugged in) and something is
-     * listening for errors, report that once and try again every second
-     * until it is: from then on, outages are the monitor's to recover from.
-     * Once trying again, keep at it whatever fails, as the monitor does in
-     * an outage, reporting failures other than the service still being
-     * down, until it starts or stop() is called.
-     */
-    private _startMonitoring(retrying: boolean): void {
         try {
-            // Create context for card connections
-            this._context = new this._Context();
+            // Create context for card connections. If the service isn't
+            // running yet (pcscd not started, or on Windows no reader
+            // plugged in), start without one: the native monitor waits for
+            // the service, as during an outage, and the context is created
+            // when it reports the service back (monitor-recovered) or a
+            // card needs one (_ensureContext). Unless nothing would hear
+            // about it: then fail, as before.
+            try {
+                this._context = new this._Context();
+            } catch (err) {
+                if (
+                    !(toPCSCError(err) instanceof ServiceNotRunningError) ||
+                    this.listenerCount('error') === 0
+                ) {
+                    throw err;
+                }
+                this._context = null;
+            }
 
             // A rejected queue from a previous session must not block this one
             this._eventQueue = Promise.resolve();
@@ -147,23 +145,7 @@ export class Devices extends EventEmitter {
             }
 
             const error = toPCSCError(err);
-            const listening = this.listenerCount('error') > 0;
-            const serviceDown = error instanceof ServiceNotRunningError;
-            if (retrying || (listening && serviceDown)) {
-                // Armed before the error is emitted, so that a listener's
-                // stop() cancels it, and its start() doesn't start a second
-                const timer = setTimeout(() => {
-                    if (this._serviceRetry !== timer) {
-                        return;
-                    }
-                    this._serviceRetry = null;
-                    this._startMonitoring(true);
-                }, SERVICE_RETRY_MS);
-                this._serviceRetry = timer;
-                if (listening && !(retrying && serviceDown)) {
-                    this.emit('error', error);
-                }
-            } else if (listening) {
+            if (this.listenerCount('error') > 0) {
                 this.emit('error', error);
             } else {
                 // No listener: fail loudly to the caller instead of
@@ -177,10 +159,6 @@ export class Devices extends EventEmitter {
      * Stop monitoring
      */
     stop(): void {
-        if (this._serviceRetry !== null) {
-            clearTimeout(this._serviceRetry);
-            this._serviceRetry = null;
-        }
         this._running = false;
         // Invalidate in-flight handlers parked on an await: a handler that
         // resumes after this stop (or a later restart) must not touch state

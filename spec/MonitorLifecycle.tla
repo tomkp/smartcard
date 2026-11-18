@@ -193,7 +193,9 @@ JsStart ==
                    THEN "std::terminate: start() assigned over a joinable monitorThread_"
                    ELSE crash
        /\ thread' = "running"
-       /\ mpc' = "init"
+       \* The thread starts by listing the readers, or, if the service
+       \* isn't running yet, in the outage path: an error, then recovery
+       /\ mpc' \in {"init", "error"}
        /\ mine' = s
     /\ UNCHANGED <<locked, alive, result, queue, jpc, changes, torn>>
     /\ UNCHANGED <<dying, leaked>>

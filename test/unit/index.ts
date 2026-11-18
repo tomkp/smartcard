@@ -2596,140 +2596,6 @@ describe('Devices.start() failure rollback', () => {
         devices.stop();
     });
 
-    // On Windows the Smart Card service stops while no reader is plugged
-    // in, so an app started then never saw a reader until it restarted
-    describe('while the PC/SC service is not running yet', () => {
-        function setup(failures: (Error | null)[]) {
-            const reader = new MockReader('Test Reader', null);
-            const monitor = new MockReaderMonitor();
-            monitor.attachReader(reader);
-            let attempts = 0;
-            const MockDevices = createMockDevices({
-                Context: function () {
-                    const failure = failures[attempts++];
-                    if (failure) {
-                        throw failure;
-                    }
-                    const context = new MockContext();
-                    context.addReader(reader);
-                    return context;
-                } as unknown as new () => MockContext,
-                ReaderMonitor: function () {
-                    return monitor;
-                } as unknown as new () => MockReaderMonitor,
-            });
-            const devices = new MockDevices();
-            const errors: Error[] = [];
-            const attached: string[] = [];
-            devices.on('reader-attached', ({ name }: { name: string }) => attached.push(name));
-            return { devices, errors, attached, attempts: () => attempts };
-        }
-        const noService = () => new ServiceNotRunningError();
-
-        it('reports it once, and starts once the service is up', async (t) => {
-            t.mock.timers.enable({ apis: ['setTimeout'] });
-            const { devices, errors, attached, attempts } = setup([noService(), noService(), noService()]);
-            devices.on('error', (err: Error) => errors.push(err));
-            devices.start();
-            assert.strictEqual(errors.length, 1);
-            assert(errors[0] instanceof ServiceNotRunningError);
-            // Already started: no second attempt of its own
-            devices.start();
-            assert.strictEqual(attempts(), 1);
-
-            t.mock.timers.tick(1000);
-            t.mock.timers.tick(1000);
-            assert.strictEqual(attempts(), 3);
-            assert.deepStrictEqual(attached, []);
-            t.mock.timers.tick(1000);
-            assert.strictEqual(attempts(), 4);
-            await new Promise((resolve) => setImmediate(resolve));
-            assert.deepStrictEqual(attached, ['Test Reader']);
-            assert.strictEqual(errors.length, 1, 'not again at every retry');
-            devices.stop();
-        });
-
-        it('stops trying when stopped', (t) => {
-            t.mock.timers.enable({ apis: ['setTimeout'] });
-            const { devices, attempts } = setup([noService(), noService()]);
-            devices.on('error', () => {});
-            devices.start();
-            devices.stop();
-            t.mock.timers.tick(5000);
-            assert.strictEqual(attempts(), 1);
-        });
-
-        it('keeps trying, and reports it, if a retry fails some other way', async (t) => {
-            t.mock.timers.enable({ apis: ['setTimeout'] });
-            const other = new Error('something else');
-            const { devices, errors, attached, attempts } = setup([noService(), other]);
-            devices.on('error', (err: Error) => errors.push(err));
-            devices.start();
-            t.mock.timers.tick(1000);
-            assert.strictEqual(attempts(), 2);
-            assert.strictEqual(errors.length, 2);
-            assert.match(errors[1].message, /something else/);
-            t.mock.timers.tick(1000);
-            assert.strictEqual(attempts(), 3);
-            await new Promise((resolve) => setImmediate(resolve));
-            assert.deepStrictEqual(attached, ['Test Reader']);
-            devices.stop();
-        });
-
-        it('keeps trying after a once() error listener has been used up', async (t) => {
-            t.mock.timers.enable({ apis: ['setTimeout'] });
-            const { devices, errors, attached, attempts } = setup([noService(), noService()]);
-            devices.once('error', (err: Error) => errors.push(err));
-            devices.start();
-            t.mock.timers.tick(1000);
-            t.mock.timers.tick(1000);
-            assert.strictEqual(attempts(), 3);
-            await new Promise((resolve) => setImmediate(resolve));
-            assert.deepStrictEqual(attached, ['Test Reader']);
-            assert.strictEqual(errors.length, 1);
-            devices.stop();
-        });
-
-        it('stops trying when an error listener stops it', (t) => {
-            t.mock.timers.enable({ apis: ['setTimeout'] });
-            const { devices, attempts } = setup([noService(), noService()]);
-            devices.on('error', () => devices.stop());
-            devices.start();
-            t.mock.timers.tick(5000);
-            assert.strictEqual(attempts(), 1);
-        });
-
-        it('waits once when an error listener restarts it', async (t) => {
-            t.mock.timers.enable({ apis: ['setTimeout'] });
-            const { devices, attached, attempts } = setup([noService(), noService()]);
-            let restarts = 0;
-            devices.on('error', () => {
-                if (restarts++ === 0) {
-                    devices.stop();
-                    devices.start();
-                }
-            });
-            devices.start();
-            // Both start()s failed; one wait is left, not two
-            assert.strictEqual(attempts(), 2);
-            t.mock.timers.tick(1000);
-            assert.strictEqual(attempts(), 3);
-            t.mock.timers.tick(5000);
-            assert.strictEqual(attempts(), 3);
-            await new Promise((resolve) => setImmediate(resolve));
-            assert.deepStrictEqual(attached, ['Test Reader']);
-            devices.stop();
-        });
-
-        it('throws, and does not retry, with no error listener', (t) => {
-            t.mock.timers.enable({ apis: ['setTimeout'] });
-            const { devices, attempts } = setup([noService(), noService()]);
-            assert.throws(() => devices.start(), ServiceNotRunningError);
-            t.mock.timers.tick(5000);
-            assert.strictEqual(attempts(), 1);
-        });
-    });
-
     it('should stay retryable when Context creation fails', () => {
         let contextCalls = 0;
         const context = new MockContext();
@@ -3114,6 +2980,108 @@ describe('Service outage recovery', () => {
 // SCARD_E_SERVICE_STOPPED.
 const addonPath = resolve(__dirname, '../../../build/Release/smartcard_napi.node');
 const NO_SERVICE_CODES = [0x8010001d, 0x8010001e];
+
+// On Windows the Smart Card service stops while no reader is plugged in, so
+// an app started then got one error and never saw a reader until it
+// restarted. Now it waits for the service as it does during an outage.
+describe('Starting while the PC/SC service is not running yet', () => {
+    it('waits for the service, then attaches its readers and connects their cards', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
+        const mockReader = new MockReader('ACR122U', mockCard);
+        let serviceUp = false;
+        let created = 0;
+        const MockDevices = createMockDevices({
+            Context: function () {
+                if (!serviceUp) {
+                    throw new ServiceNotRunningError();
+                }
+                created++;
+                const context = new MockContext();
+                context.addReader(mockReader);
+                return context;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+        const mockMonitor = new MockReaderMonitor();
+        const devices = new MockDevices();
+        const errors: Error[] = [];
+        const inserted: string[] = [];
+        devices.on('error', (err: Error) => errors.push(err));
+        devices.on('card-inserted', ({ reader }: { reader: { name: string } }) =>
+            inserted.push(reader.name)
+        );
+
+        devices.start();
+        assert(mockMonitor.isRunning, 'the monitor waits for the service');
+        assert.deepStrictEqual(devices.listReaders(), []);
+
+        // The native monitor, as during an outage: an error while the
+        // service is down, then monitor-recovered and the readers it finds
+        mockMonitor.emitError('Service not available (0x8010001D)', 0x8010001d);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        serviceUp = true;
+        mockMonitor.recover();
+        mockMonitor.attachReader(mockReader);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        assert.strictEqual(errors.length, 1, "only the monitor's own error");
+        assert.deepStrictEqual(inserted, ['ACR122U']);
+        assert.strictEqual(created, 1, 'a context once the service is back');
+        devices.stop();
+    });
+
+    it('throws from start() instead, with no error listener', () => {
+        const mockMonitor = new MockReaderMonitor();
+        const MockDevices = createMockDevices({
+            Context: function () {
+                throw new ServiceNotRunningError();
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+        const devices = new MockDevices();
+        assert.throws(() => devices.start(), ServiceNotRunningError);
+        assert.strictEqual(mockMonitor.isRunning, false);
+    });
+
+    // Only where there really is no PC/SC service (CI's Windows runners)
+    it('lets a native monitor start without the service, reporting it once a second', async (t) => {
+        const addon = require(addonPath) as {
+            Context: new () => { close(): void };
+            ReaderMonitor: new () => {
+                start(callback: (event: MonitorEvent) => void): void;
+                stop(): void;
+            };
+        };
+        try {
+            new addon.Context().close();
+            t.skip('there is a PC/SC service here');
+            return;
+        } catch (err) {
+            const code = (err as { code?: number }).code;
+            if (code === undefined || !NO_SERVICE_CODES.includes(code)) {
+                throw err;
+            }
+        }
+        const monitor = new addon.ReaderMonitor();
+        const errors: MonitorEvent[] = [];
+        monitor.start((event) => {
+            if (event.type === 'error') errors.push(event);
+        });
+        try {
+            await new Promise((resolve) => setTimeout(resolve, 2500));
+            assert(errors.length >= 2, `${errors.length} error events in 2.5 s`);
+            assert(errors.every((e) => e.code !== undefined && NO_SERVICE_CODES.includes(e.code >>> 0)));
+        } finally {
+            const started = Date.now();
+            monitor.stop();
+            assert(Date.now() - started < 250, 'stop() cuts the pause short');
+        }
+    });
+});
 
 describe('Worker teardown with native work outstanding', () => {
     // A worker ends - exits, or is terminated - while the addon still has

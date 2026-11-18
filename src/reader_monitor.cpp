@@ -159,13 +159,22 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
 
     Napi::Function callback = info[0].As<Napi::Function>();
 
-    // Establish PC/SC context
+    // Establish PC/SC context. If the service isn't running yet (pcscd not
+    // started, or on Windows no reader plugged in), start anyway: the
+    // monitor thread then begins as it is during an outage, establishing
+    // it once a second and reporting an error event each time it can't,
+    // until monitor-recovered and the readers it finds
     LONG result = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context_);
-    if (result != SCARD_S_SUCCESS) {
+    if (result == SCARD_S_SUCCESS) {
+        contextValid_ = true;
+    } else if (result == static_cast<LONG>(SCARD_E_NO_SERVICE) ||
+               result == static_cast<LONG>(SCARD_E_SERVICE_STOPPED)) {
+        context_ = 0;
+        contextValid_ = false;
+    } else {
         NewPCSCError(env, result).ThrowAsJavaScriptException();
         return env.Undefined();
     }
-    contextValid_ = true;
 
     // Per-session liveness flag. The tsfn finalizer runs asynchronously on a
     // later event-loop tick, so after a same-tick stop()/start() a stale
@@ -271,8 +280,11 @@ void ReaderMonitor::ApplyCardStateChange(ReaderInfo& info, const std::string& re
 }
 
 void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive) {
-    // Get initial reader list
-    UpdateReaderList();
+    // Get initial reader list, unless the service isn't running yet: the
+    // recovery at the top of the loop lists them once it is
+    if (contextValid_) {
+        UpdateReaderList();
+    }
 
     // Emit reader-attached events for all pre-existing readers (Issue #30)
     {
