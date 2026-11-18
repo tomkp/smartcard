@@ -261,7 +261,7 @@ class Context {
     constructor();
     readonly isValid: boolean;
     listReaders(): Reader[];
-    waitForChange(readers?: Reader[], timeout?: number): Promise<ReaderState[] | null>;
+    waitForChange(readers?: Reader[] | null, timeout?: number): Promise<ReaderState[] | null>;
     cancel(): void;
     close(): void;
 }
