@@ -2,6 +2,7 @@
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
 #include "pcsc_napi_error.h"
+#include <chrono>
 #include <cstring>
 
 // ============================================================================
@@ -14,15 +15,16 @@ WaitForChangeWorker::WaitForChangeWorker(
     SCARDCONTEXT context,
     std::vector<std::string> readerNames,
     std::vector<DWORD> currentStates,
-    DWORD timeout,
-    Napi::Promise::Deferred deferred)
-    : Napi::AsyncWorker(env),
-      ownerRef_(Napi::Persistent(owner)),
+    DWORD timeout)
+    : ownerRef_(Napi::Persistent(owner)),
+      deferred_(Napi::Promise::Deferred::New(env)),
       context_(context),
       readerNames_(std::move(readerNames)),
       timeout_(timeout),
       result_(SCARD_S_SUCCESS),
-      deferred_(deferred) {
+      waited_(false),
+      cleanupHookAdded_(false),
+      envTornDown_(false) {
 
     // Initialize reader states
     states_.resize(readerNames_.size());
@@ -33,14 +35,126 @@ WaitForChangeWorker::WaitForChangeWorker(
     }
 }
 
-void WaitForChangeWorker::Execute() {
-    // This runs on worker thread - safe to block
-    result_ = SCardGetStatusChange(context_, timeout_, states_.data(), states_.size());
+Napi::Promise WaitForChangeWorker::Start(
+    Napi::Env env,
+    Napi::Object owner,
+    SCARDCONTEXT context,
+    std::vector<std::string> readerNames,
+    std::vector<DWORD> currentStates,
+    DWORD timeout) {
+
+    auto* self = new WaitForChangeWorker(
+        env, owner, context, std::move(readerNames), std::move(currentStates), timeout);
+    Napi::Promise promise = self->deferred_.Promise();
+
+    try {
+        // Referenced until released, so a pending wait keeps the event
+        // loop alive, as threadpool work did
+        self->tsfn_ = DoneTsfn::New(env, "waitForChange", 0, 1, self, OnDone);
+    } catch (...) {
+        delete self;
+        throw;
+    }
+    // From here OnDone frees self
+
+    // Added after the tsfn, so that at environment teardown it runs before
+    // the tsfn's own hook: Node runs them newest first. Without it nothing
+    // could end the wait at teardown, so no wait is started.
+    self->cleanupHookAdded_ =
+        napi_add_env_cleanup_hook(env, OnEnvCleanup, self) == napi_ok;
+
+    bool started = false;
+    if (self->cleanupHookAdded_) {
+        try {
+            self->thread_ = std::thread(&WaitForChangeWorker::Execute, self);
+            started = true;
+        } catch (...) {
+            // No thread to be had (std::system_error, std::bad_alloc)
+        }
+    }
+    if (!started) {
+        // Fail the wait: OnDone rejects it
+        self->result_ = SCARD_E_NO_MEMORY;
+        self->tsfn_.Release();
+    }
+
+    return promise;
 }
 
-void WaitForChangeWorker::OnOK() {
-    Napi::Env env = Env();
+void WaitForChangeWorker::Execute() {
+    result_ = SCardGetStatusChange(context_, timeout_, states_.data(), states_.size());
+    {
+        std::lock_guard<std::mutex> lock(waitedMutex_);
+        waited_ = true;
+    }
+    waitedCv_.notify_all();
+    tsfn_.Release();
+}
 
+// The environment is being torn down (a worker exiting, or terminated)
+// with the wait still pending: end it, so the tsfn's own cleanup hook,
+// which runs next, finds the thread done with it (as in ReaderMonitor).
+// The promise is left unsettled; nothing can observe it any more.
+void WaitForChangeWorker::OnEnvCleanup(void* arg) {
+    auto* self = static_cast<WaitForChangeWorker*>(arg);
+    // Node drops the hook itself once it has run
+    self->cleanupHookAdded_ = false;
+    self->envTornDown_ = true;
+    if (self->thread_.joinable()) {
+        // SCardCancel ends only a wait in progress, not one whose thread
+        // hasn't reached SCardGetStatusChange yet, so cancel until this
+        // one has returned. Waits on this context all belong to this
+        // environment, so they are all ending anyway.
+        {
+            std::unique_lock<std::mutex> lock(self->waitedMutex_);
+            while (!self->waited_) {
+                lock.unlock();
+                SCardCancel(self->context_);
+                lock.lock();
+                self->waitedCv_.wait_for(lock, std::chrono::milliseconds(10),
+                                         [self] { return self->waited_; });
+            }
+        }
+        self->thread_.join();
+    }
+    // While the environment can still delete references
+    self->ownerRef_.Reset();
+}
+
+void WaitForChangeWorker::OnDone(Napi::Env env, void*, WaitForChangeWorker* self) {
+    if (self->thread_.joinable()) {
+        // Execute() has released the tsfn, so it is returning
+        self->thread_.join();
+    }
+    if (self->cleanupHookAdded_) {
+        napi_remove_env_cleanup_hook(env, OnEnvCleanup, self);
+        self->cleanupHookAdded_ = false;
+    }
+    if (!self->envTornDown_) {
+        // If building the result fails, fail the wait with that error.
+        // Node can also finalize the tsfn early in a teardown, before the
+        // cleanup hooks run, when JS can't run: then rejecting fails too,
+        // nothing can observe the promise any more, and the failure must
+        // not escape into Node.
+        try {
+            self->Settle(env);
+        } catch (const Napi::Error& e) {
+            try {
+                self->deferred_.Reject(e.Value());
+            } catch (...) {
+            }
+        } catch (...) {
+            try {
+                self->deferred_.Reject(Napi::Error::New(
+                    env, "waitForChange() could not deliver its result").Value());
+            } catch (...) {
+            }
+        }
+    }
+    delete self;
+}
+
+void WaitForChangeWorker::Settle(Napi::Env env) {
     if (result_ == SCARD_S_SUCCESS) {
         // Build array of reader states
         Napi::Array changes = Napi::Array::New(env);
@@ -72,10 +186,6 @@ void WaitForChangeWorker::OnOK() {
     } else {
         deferred_.Reject(NewPCSCError(env, result_).Value());
     }
-}
-
-void WaitForChangeWorker::OnError(const Napi::Error& error) {
-    deferred_.Reject(error.Value());
 }
 
 // ============================================================================
