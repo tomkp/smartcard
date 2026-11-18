@@ -2,7 +2,6 @@
 #include "pcsc_card.h"
 #include "pcsc_errors.h"
 #include "pcsc_napi_error.h"
-#include <algorithm>
 #include <chrono>
 #include <cstring>
 
@@ -166,7 +165,8 @@ bool WaitForChangeWorker::CancelUntilReturned(bool teardown) {
                     failingSince = Clock::now();
                 }
                 if (teardown) {
-                    interval = std::min(interval * 2, kTeardownRetryMax);
+                    // Not std::min: windows.h defines a min() macro
+                    interval = interval * 2 < kTeardownRetryMax ? interval * 2 : kTeardownRetryMax;
                 } else if (Clock::now() - failingSince >= kCancelFailingFor) {
                     return false;
                 }
