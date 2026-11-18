@@ -85,13 +85,13 @@ Two ideas have no counterpart in Z:
 | `Events-v3.8-newreader` | 3.8.0: JS learns about every reader that is plugged in | Violated (finding 2) |
 | `Events-v3.8-gonereader` | 3.8.0: JS learns about every reader that goes away | Violated (finding 3) |
 | `Events-v3.8-deaf` | 3.8.0: JS learns whether each reader holds a card | Violated (finding 3) |
-| `Wait-current` | `waitForChange()` as it is, with 2 waits, `cancel()`, `close()` and `listReaders()`: every call returns, `cancel()` and `close()` end every pending wait, every wait is settled and freed, and no thread blocks holding pcsc-lite's global lock | No errors (120k states) |
+| `Wait-current` | `waitForChange()` with 2 waits, `cancel()`, `close()` and `listReaders()`, and `cancel()` retrying until the wait returns: every call returns, `cancel()` and `close()` end every pending wait, every wait is settled and freed, and no thread blocks on a lock holding pcsc-lite's global lock | No errors (120k states) |
 | `Wait-teardown` | The same, with Node tearing the environment down | No errors |
 | `Wait-wide` | The invariants alone, with more of pcscd, a teardown, and `cancel()` giving up after 2 attempts as the code does after 200 | No errors (3M states) |
 | `Wait-giveup` | What if a wait doesn't reach the point where it can be cancelled before `cancel()` stops trying? | Violated: the wait goes on (see [waitForChange()](#waitforchange)) |
-| `Wait-hookorder` | What if `Start()` added its teardown hook before creating the tsfn? | Teardown hangs |
 | `Wait-pre161-cancel` | Before #161: a `cancel()` that comes before the wait begins | Violated: the wait goes on |
-| `Wait-pre161-list` | Before #161: `listReaders()` or `close()` with a wait pending | The JS thread blocks until the wait ends |
+| `Wait-pre161-list` | Before #161: `listReaders()` with a wait pending | The JS thread blocks until the wait ends |
+| `Wait-pre161-close` | Before #161: `close()` with a wait pending | The same |
 | `Wait-pre161-twowaits` | Before #161: `cancel()` with two waits pending | The JS thread blocks until the first wait ends |
 
 The two pre-#139 configs reproduce, step for step, the two bugs that #139's
@@ -352,7 +352,8 @@ a wait keeps its context locked for as long as it lasts. `SCardCancel`
 ends a wait only while the wait is blocked on pcscd, which it marks with
 the context's `cancellable` flag. At any other moment, such as while the
 wait is registering with pcscd or comparing reader states, the cancel does
-nothing.
+nothing. The model assumes pcscd answers: each call's exchange with it is
+one step.
 
 ### Before #161
 
@@ -365,7 +366,8 @@ used the `Context`'s own PC/SC context):
   but wasn't yet blocked on pcscd, the cancel did nothing, and the wait
   went on (with no timeout, forever). On macOS `waitForChange();
   cancel()` did this every time.
-- **`listReaders()` and `close()` block** (`Wait-pre161-list`). Each locks
+- **`listReaders()` and `close()` block** (`Wait-pre161-list`,
+  `Wait-pre161-close`). Each locks
   the context the wait holds, so the JS thread waited until the wait
   ended.
 - **A second wait blocks every PC/SC call** (`Wait-pre161-twowaits`). The
@@ -386,10 +388,13 @@ has returned. `Wait-current` and `Wait-teardown` check that:
   (`CancelEnds`)
 - every wait that returns is settled and freed (`Delivered`), and only a
   cancelled one resolves with `null` (`NullOnlyIfCancelled`)
-- no thread ever blocks holding pcsc-lite's global lock
+- no thread ever blocks on a lock while holding pcsc-lite's global lock
   (`GlobalLockFree`), and only a wait locks its own context
   (`OwnContextsUnshared`), so a pending wait can't hold up any other
-  PC/SC call in the process, the monitor's included
+  PC/SC call in the process, the monitor's included. This assumes pcscd
+  answers: `SCardEstablishContext`, which each wait now calls, holds the
+  global lock through its round trips to pcscd, so a pcscd that stops
+  answering stalls every PC/SC call in the process, as it would anyway.
 - `SCardCancel` is never called on a released context (`NoCrash`). PC/SC
   reuses handle values, so such a call could cancel someone else's wait.
 - at teardown, every wait is cancelled, joined and freed
@@ -408,15 +413,23 @@ card changes. That needs the wait to take more than a second to get from
 answer. A teardown has no limit (`OnEnvCleanup` keeps trying), so this
 doesn't affect it.
 
-The order of `Start()`'s teardown hook matters here too
-(`Wait-hookorder`). Added before the tsfn, the tsfn's hook runs first on
-Node 22. It runs `OnDone`, which joins the wait's thread while the wait is
-still blocked, so the teardown hangs until the wait ends on its own.
+The liveness properties are checked with one pcscd event in all
+(`MaxEvents = 1`), to keep CI short. `Wait-current` also passes with two,
+checked by hand (322k states, about 6 minutes). `Wait-wide` checks the
+invariants with three.
+
+At teardown, Node runs every cleanup hook before any tsfn's finalizer. The
+tsfn's own hook only starts closing it (`Cleanup` in `node_api.cc`), and
+`OnDone` runs afterwards, when Node closes its handles. That is so on Node
+22 and 24, and the model follows it, so the order of `Start()`'s two hooks
+doesn't matter here.
 
 `WaitLifecycle.tla` leaves out the paths where `Start()` can't add its
 cleanup hook or start a thread (the promise is rejected at once), the GC of
-a `Context` with waits pending, and Node 24's tsfn teardown (see finding
-4). Like the other specs, it models pcsc-lite only.
+a `Context` with waits pending, and what `Settle` does when `OnDone` runs
+after JS has stopped running (it fails, and the model assumes `OnDone`'s
+`try`/`catch` swallows that). Like the other specs, it models pcsc-lite
+only.
 
 ## What the model leaves out
 

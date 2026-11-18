@@ -18,6 +18,11 @@
 (* locked for as long as it lasts. SCardCancel only reads the context's    *)
 (* "cancellable" flag, which a wait sets only while it is blocked waiting  *)
 (* for pcscd: a cancel at any other moment does nothing.                   *)
+(*                                                                         *)
+(* pcscd is assumed to answer: a call's exchange with it is part of one    *)
+(* step. (SCardEstablishContext, for one, holds the global lock through    *)
+(* two round trips to pcscd, so a pcscd that stops answering stalls every  *)
+(* PC/SC call in the process; that is outside the model.)                  *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -36,9 +41,7 @@ CONSTANTS
     Design,       \* "current"; "pre161": as in #158 (698e2d9), where every wait
                   \*   used the Context's PC/SC context and cancel() called
                   \*   SCardCancel once
-    WithTeardown, \* Node may tear the environment down (e.g. a worker exits)
-    HookRunsFirst \* at teardown each wait's OnEnvCleanup runs before its tsfn's
-                  \*   own hook (Start() adds it after creating the tsfn)
+    WithTeardown  \* Node may tear the environment down (e.g. a worker exits)
 
 ASSUME /\ MaxWaits \in Nat \ {0}
        /\ MaxEvents \in Nat
@@ -46,7 +49,6 @@ ASSUME /\ MaxWaits \in Nat \ {0}
        /\ Ops \subseteq {"cancel", "close", "list"}
        /\ Design \in {"current", "pre161"}
        /\ WithTeardown \in BOOLEAN
-       /\ HookRunsFirst \in BOOLEAN
 
 Waits == 1..MaxWaits
 \* PC/SC contexts: 0 is the Context's own; w is wait w's (current design)
@@ -68,8 +70,9 @@ VARIABLES
     waited,     \* waited_: Execute() is done with the context
     mtx,        \* who holds mutex_: "none" | "js" | "thread"
     ctxValid,   \* contextValid_
-    tsfn,       \* "unused" | "live" | "released" | "deleted". Deleted once
-                \*   OnDone has run, which deletes the worker too.
+    tsfn,       \* "unused" | "live" | "released" | "closing" (its teardown
+                \*   hook has run) | "deleted". Deleted once OnDone has run,
+                \*   which deletes the worker too.
     hook,       \* OnEnvCleanup is registered with Node
     envGone,    \* envTornDown_
     outcome,    \* what JS got: "pending" | "array" | "empty" | "null" |
@@ -94,7 +97,8 @@ VARIABLES
     started,    \* waits started so far
     \* the environment
     dying,      \* Node has begun tearing the environment down: JS can't run
-    tslot,      \* which cleanup hook runs next (0: not yet begun)
+    tslot,      \* teardown: whose OnEnvCleanup runs next, counting down
+                \*   from the newest wait (0: not yet begun)
     torn,       \* every cleanup hook has run
     crash       \* "none", or the fatal thing that happened
 
@@ -120,7 +124,7 @@ TypeOK ==
     /\ waited \in [Waits -> BOOLEAN]
     /\ mtx \in [Waits -> {"none", "js", "thread"}]
     /\ ctxValid \in [Waits -> BOOLEAN]
-    /\ tsfn \in [Waits -> {"unused", "live", "released", "deleted"}]
+    /\ tsfn \in [Waits -> {"unused", "live", "released", "closing", "deleted"}]
     /\ hook \in [Waits -> BOOLEAN]
     /\ envGone \in [Waits -> BOOLEAN]
     /\ outcome \in [Waits -> {"pending", "array", "empty", "null", "rejected",
@@ -138,7 +142,7 @@ TypeOK ==
     /\ toCancel \subseteq Waits
     /\ started \in 0..MaxWaits
     /\ dying \in BOOLEAN
-    /\ tslot \in 0..2 * MaxWaits + 1
+    /\ tslot \in 0..MaxWaits + 1
     /\ torn \in BOOLEAN
     /\ crash \in STRING
 
@@ -188,8 +192,11 @@ BlockedOn(c) == {u \in Waits : ctxLock[c] = u /\ wpc[u] = "blocked"}
 
 \* SCardCancel(c). Called only while the caller can take the global lock.
 \* It ends the wait blocked on c, if there is one, and otherwise does
-\* nothing. pcsc-lite rejects a handle it doesn't know, but context handles
-\* are reused, so a released one may name someone else's context by now.
+\* nothing. (pcscd wakes the wait a little later; the model has it return
+\* at once. A pcscd event that wins that race would end the wait with a
+\* change instead, which no property here forbids.) pcsc-lite rejects a
+\* handle it doesn't know, but context handles are reused, so a released
+\* one may name someone else's context by now.
 CancelOn(c) ==
     IF ctx[c] = "released"
     THEN /\ crash' = "SCardCancel on a released context, whose handle may name another by now"
@@ -457,8 +464,10 @@ Finalize(w) ==
     /\ UNCHANGED <<envVars, crash>>
 
 \* OnDone: join the thread if joinable (it blocks until the thread exits),
-\* remove OnEnvCleanup, erase from pendingWaits_, settle unless JS can't
-\* run any more, delete the worker; then Node deletes the tsfn
+\* remove OnEnvCleanup, erase from pendingWaits_, settle unless
+\* OnEnvCleanup has run, delete the worker; then Node deletes the tsfn.
+\* While dying, Settle runs but can't reach JS: it fails, and the model
+\* assumes OnDone's try/catch swallows that, so JS gets nothing.
 DoneJoin ==
     /\ jpc = "doneJoin"
     /\ wpc[cw] \in {"finished", "joined"}
@@ -487,7 +496,16 @@ TeardownBegin ==
     /\ UNCHANGED jsVars
     /\ UNCHANGED <<tslot, torn, crash>>
 
-\* Then Node runs the cleanup hooks, newest first
+\* Then Node runs the cleanup hooks, newest first (Environment::RunCleanup,
+\* env.cc). Each wait registered two: its tsfn's, when Start() created it,
+\* then OnEnvCleanup. OnDone removes OnEnvCleanup, and Node the tsfn's.
+\*
+\* - OnEnvCleanup: envTornDown_ = true, then CancelUntilReturned(0) and
+\*   join. They run newest wait first.
+\* - The tsfn's hook (node_api.cc, Cleanup) only marks it closing and
+\*   schedules uv_close. Its finalizer, OnDone, runs once every hook has
+\*   run, when Node runs the loop to close handles (CleanupHandles). That
+\*   is so on Node 22 and 24, so the order of the two hooks doesn't matter.
 TdStart ==
     /\ dying
     /\ tslot = 0
@@ -499,40 +517,38 @@ TdStart ==
     /\ UNCHANGED <<jcall, jret, cw, attempts, toCancel, started>>
     /\ UNCHANGED <<dying, torn, crash>>
 
-\* Each wait registered two hooks: its tsfn's (on creation) and OnEnvCleanup
-\* (just after, unless HookRunsFirst is FALSE). Slot k is the newer of wait
-\* (started - (k-1) \div 2)'s two hooks when k is odd, the older when even.
-\* A hook that has been removed is skipped.
-\*
-\* - OnEnvCleanup: envTornDown_ = true, then CancelUntilReturned(0) and
-\*   join.
-\* - The tsfn's hook (Node 22: node_api.cc, Cleanup) closes the tsfn
-\*   whatever its thread count: OnDone runs, so joins, then the tsfn is
-\*   deleted.
 TdNext ==
     /\ jpc = "tdNext"
-    /\ IF tslot > 2 * started
-       THEN /\ torn' = TRUE
+    /\ IF tslot <= started
+       THEN LET w == started + 1 - tslot IN
+            /\ tslot' = tslot + 1
+            /\ IF hook[w]
+               THEN /\ hook' = [hook EXCEPT ![w] = FALSE]
+                    /\ envGone' = [envGone EXCEPT ![w] = TRUE]
+                    /\ cw' = w
+                    /\ attempts' = 0
+                    /\ jret' = "hook"
+                    /\ jpc' = "cuLock"
+               ELSE UNCHANGED <<hook, envGone, jret, cw, attempts, jpc>>
+            /\ UNCHANGED <<tsfn, torn>>
+       ELSE IF \E w \in Waits : tsfn[w] \in {"live", "released"}
+       THEN \* the tsfns' hooks. They run between the OnEnvCleanups, but
+            \* only mark their tsfns closing, so all at once is the same.
+            /\ tsfn' = [w \in Waits |-> IF tsfn[w] \in {"live", "released"}
+                                        THEN "closing" ELSE tsfn[w]]
+            /\ UNCHANGED <<hook, envGone, jret, cw, attempts, jpc, tslot, torn>>
+       ELSE IF \E w \in Waits : tsfn[w] = "closing"
+       THEN \* closing the handles: OnDone for each
+            \E w \in Waits :
+            /\ tsfn[w] = "closing"
+            /\ cw' = w
+            /\ jret' = "td"
+            /\ jpc' = "doneJoin"
+            /\ UNCHANGED <<hook, envGone, attempts, tsfn, tslot, torn>>
+       ELSE /\ torn' = TRUE
             /\ jpc' = "gone"
-            /\ UNCHANGED <<hook, envGone, jret, cw, attempts, tslot>>
-       ELSE LET w == started - (tslot - 1) \div 2
-                waitHook == (((tslot - 1) % 2 = 0) = HookRunsFirst)
-            IN /\ tslot' = tslot + 1
-               /\ UNCHANGED torn
-               /\ IF waitHook /\ hook[w]
-                  THEN /\ hook' = [hook EXCEPT ![w] = FALSE]
-                       /\ envGone' = [envGone EXCEPT ![w] = TRUE]
-                       /\ cw' = w
-                       /\ attempts' = 0
-                       /\ jret' = "hook"
-                       /\ jpc' = "cuLock"
-                  ELSE IF ~waitHook /\ tsfn[w] \in {"live", "released"}
-                  THEN /\ cw' = w
-                       /\ jret' = "td"
-                       /\ jpc' = "doneJoin"
-                       /\ UNCHANGED <<hook, envGone, attempts>>
-                  ELSE UNCHANGED <<hook, envGone, jret, cw, attempts, jpc>>
-    /\ UNCHANGED <<wpc, result, timed, cancelled, waited, mtx, ctxValid, tsfn,
+            /\ UNCHANGED <<hook, envGone, jret, cw, attempts, tsfn, tslot>>
+    /\ UNCHANGED <<wpc, result, timed, cancelled, waited, mtx, ctxValid,
                    outcome, cancelReq>>
     /\ UNCHANGED pcscVars
     /\ UNCHANGED <<jcall, toCancel, started>>
@@ -698,25 +714,23 @@ ReleaseCtx(w) ==
     /\ UNCHANGED <<glock, ctxLock, events>>
     /\ UNCHANGED <<jsVars, envVars, crash>>
 
-\* tsfn_.Release(), and the thread function returns
+\* tsfn_.Release(), and the thread function returns. Releasing a tsfn whose
+\* teardown hook has run leaves it to close.
 Release(w) ==
     /\ wpc[w] = "release"
-    /\ IF tsfn[w] = "deleted"
-       THEN /\ crash' = "use-after-free: Release() on a deleted tsfn"
-            /\ UNCHANGED tsfn
-       ELSE /\ tsfn' = [tsfn EXCEPT ![w] = "released"]
-            /\ UNCHANGED crash
+    /\ CASE tsfn[w] = "deleted" ->
+              /\ crash' = "use-after-free: Release() on a deleted tsfn"
+              /\ UNCHANGED tsfn
+         [] tsfn[w] = "closing" -> UNCHANGED <<tsfn, crash>>
+         [] OTHER ->
+              /\ tsfn' = [tsfn EXCEPT ![w] = "released"]
+              /\ UNCHANGED crash
     /\ wpc' = [wpc EXCEPT ![w] = "finished"]
     /\ UNCHANGED <<result, timed, cancelled, waited, mtx, ctxValid, hook,
                    envGone, outcome, cancelReq>>
     /\ UNCHANGED <<pcscVars, jsVars, envVars>>
 
 -----------------------------------------------------------------------------
-
-\* Once a crash has happened, or the environment is gone, stop
-Done ==
-    /\ crash # "none" \/ jpc = "gone"
-    /\ UNCHANGED vars
 
 Thread(w) ==
     \/ Establish(w) \/ Publish(w) \/ Lock(w) \/ Stuck(w) \/ Arm(w)
@@ -735,7 +749,6 @@ Next ==
     \/ JsWait \/ JsCancel \/ JsClose \/ JsList \/ JsStep
     \/ TeardownBegin \/ TdStart
     \/ \E w \in Waits : Thread(w) \/ Pcsc(w) \/ Finalize(w)
-    \/ Done
 
 \* Threads that can run do run, timeouts fire, the event loop runs, and a
 \* teardown that has begun completes. Steps that need a lock (mutex_, or
@@ -764,8 +777,9 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 \* Nothing fatal: no use-after-free, no SCardCancel on a stale handle
 NoCrash == crash = "none"
 
-\* No thread ever blocks holding pcsc-lite's global lock, so no PC/SC call
-\* anywhere in the process waits for a waitForChange()
+\* No thread ever blocks on a lock while holding pcsc-lite's global lock, so
+\* no PC/SC call anywhere in the process waits for a pending
+\* waitForChange() (given that pcscd answers: see the top)
 GlobalLockFree == glock = Nobody
 
 \* A wait's own context is locked only by that wait
