@@ -338,12 +338,14 @@ second to exit.
 - **The service-outage recovery path** in `MonitorEvents`. `MonitorLifecycle`
   has it only abstractly. It is tested instead: `test/virtual` restarts
   pcscd under a running monitor with a virtual card in the reader.
-- **The JS layer** (`lib/devices.ts`). One hypothesis worth modelling next:
+- **The JS layer** (`lib/devices.ts`). A hypothesis that was listed here
+  for modelling turned out true, and was found by a unit test instead:
   after a same-tick `stop()`/`start()`, events still queued in the old
   monitor's tsfn are delivered, because Node keeps dispatching a released
-  tsfn until its queue drains. They reach `_processEvent` with `_running`
-  already true again, so stale events could be applied to the new session.
-  This has not been checked.
+  tsfn until its queue drains. They reached `_processEvent` with `_running`
+  already true again, so a stale `monitor-recovered` closed the new
+  session's context. Events now carry the generation of the session that
+  started their monitor, and other sessions drop them.
 - **Larger sizes.** TLC checks every behaviour, but only within the bounds:
   2–3 sessions, 1–3 readers and at most 6 world steps. The bet (the "small
   scope hypothesis") is that bugs show up at small sizes. Every finding here
