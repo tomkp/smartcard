@@ -344,7 +344,7 @@ If the PC/SC service stops while `Devices` is running (pcscd restarting, say, or
 - **The service is back within about a second:** every card still in a reader is reported `card-removed`, then `card-inserted` with a new `Card`. The old `Card`'s connection died with the service. If the restarted service hasn't found its readers again yet, they are reported detached and attached instead, as below.
 - **It stays down longer:** every reader is reported `reader-detached`, with `card-removed` first for its card. When the service returns, the readers are attached again, with their cards.
 
-If the service is already down when you call `start()`, `start()` fails and doesn't retry: it emits `error` (or throws, with no `error` listener), and you can call it again later.
+If the service isn't running yet when you call `start()` (on Windows, with no reader plugged in), `start()` emits one `ServiceNotRunningError` and keeps trying every second, so readers appear once the service starts. Without an `error` listener, `start()` throws instead.
 
 ### Auto GET RESPONSE (T=0 Protocol)
 

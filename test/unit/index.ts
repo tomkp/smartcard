@@ -19,6 +19,7 @@ import {
     SCARD_PROTOCOL_T1,
 } from '../helpers/mock';
 import type { Card, MonitorEvent, ReaderEventInfo } from '../../lib/types';
+import { ServiceNotRunningError } from '../../lib/errors';
 
 describe('MockCard', () => {
     it('should create a mock card with protocol and ATR', () => {
@@ -2593,6 +2594,92 @@ describe('Devices.start() failure rollback', () => {
         devices.start();
         assert.strictEqual(monitor.startAttempts, 2);
         devices.stop();
+    });
+
+    // On Windows the Smart Card service stops while no reader is plugged
+    // in, so an app started then never saw a reader until it restarted
+    describe('while the PC/SC service is not running yet', () => {
+        function setup(failures: (Error | null)[]) {
+            const reader = new MockReader('Test Reader', null);
+            const monitor = new MockReaderMonitor();
+            monitor.attachReader(reader);
+            let attempts = 0;
+            const MockDevices = createMockDevices({
+                Context: function () {
+                    const failure = failures[attempts++];
+                    if (failure) {
+                        throw failure;
+                    }
+                    const context = new MockContext();
+                    context.addReader(reader);
+                    return context;
+                } as unknown as new () => MockContext,
+                ReaderMonitor: function () {
+                    return monitor;
+                } as unknown as new () => MockReaderMonitor,
+            });
+            const devices = new MockDevices();
+            const errors: Error[] = [];
+            const attached: string[] = [];
+            devices.on('reader-attached', ({ name }: { name: string }) => attached.push(name));
+            return { devices, errors, attached, attempts: () => attempts };
+        }
+        const noService = () => new ServiceNotRunningError();
+
+        it('reports it once, and starts once the service is up', async (t) => {
+            t.mock.timers.enable({ apis: ['setTimeout'] });
+            const { devices, errors, attached, attempts } = setup([noService(), noService(), noService()]);
+            devices.on('error', (err: Error) => errors.push(err));
+            devices.start();
+            assert.strictEqual(errors.length, 1);
+            assert(errors[0] instanceof ServiceNotRunningError);
+            // Already started: no second attempt of its own
+            devices.start();
+            assert.strictEqual(attempts(), 1);
+
+            t.mock.timers.tick(1000);
+            t.mock.timers.tick(1000);
+            assert.strictEqual(attempts(), 3);
+            assert.deepStrictEqual(attached, []);
+            t.mock.timers.tick(1000);
+            assert.strictEqual(attempts(), 4);
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.deepStrictEqual(attached, ['Test Reader']);
+            assert.strictEqual(errors.length, 1, 'not again at every retry');
+            devices.stop();
+        });
+
+        it('stops trying when stopped', (t) => {
+            t.mock.timers.enable({ apis: ['setTimeout'] });
+            const { devices, attempts } = setup([noService(), noService()]);
+            devices.on('error', () => {});
+            devices.start();
+            devices.stop();
+            t.mock.timers.tick(5000);
+            assert.strictEqual(attempts(), 1);
+        });
+
+        it('stops trying, and reports it, if a retry fails some other way', (t) => {
+            t.mock.timers.enable({ apis: ['setTimeout'] });
+            const other = new Error('something else');
+            const { devices, errors, attempts } = setup([noService(), other]);
+            devices.on('error', (err: Error) => errors.push(err));
+            devices.start();
+            t.mock.timers.tick(1000);
+            assert.strictEqual(attempts(), 2);
+            assert.strictEqual(errors.length, 2);
+            assert.match(errors[1].message, /something else/);
+            t.mock.timers.tick(5000);
+            assert.strictEqual(attempts(), 2);
+        });
+
+        it('throws, and does not retry, with no error listener', (t) => {
+            t.mock.timers.enable({ apis: ['setTimeout'] });
+            const { devices, attempts } = setup([noService(), noService()]);
+            assert.throws(() => devices.start(), ServiceNotRunningError);
+            t.mock.timers.tick(5000);
+            assert.strictEqual(attempts(), 1);
+        });
     });
 
     it('should stay retryable when Context creation fails', () => {
