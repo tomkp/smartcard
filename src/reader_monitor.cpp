@@ -24,10 +24,16 @@ static std::string FormatPCSCError(LONG code) {
 // SCARD_E_INVALID_PARAMETER is deliberately not one: it is a per-call
 // argument error, and recycling a healthy context would re-seed lastState
 // and latch away pending transitions.
+// The PC/SC service isn't running (not started yet, stopped, or on
+// Windows stopped because no reader is plugged in)
+static bool IsServiceDown(LONG result) {
+    DWORD code = static_cast<DWORD>(result);
+    return code == SCARD_E_SERVICE_STOPPED || code == SCARD_E_NO_SERVICE;
+}
+
 static bool IsContextFatal(LONG result) {
     DWORD code = static_cast<DWORD>(result);
-    if (code == SCARD_E_SERVICE_STOPPED || code == SCARD_E_NO_SERVICE ||
-        code == SCARD_E_INVALID_HANDLE) {
+    if (IsServiceDown(result) || code == SCARD_E_INVALID_HANDLE) {
         return true;
     }
 #ifdef _WIN32
@@ -161,17 +167,13 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
 
     // Establish PC/SC context. If the service isn't running yet (pcscd not
     // started, or on Windows no reader plugged in), start anyway: the
-    // monitor thread then begins as it is during an outage, establishing
-    // it once a second and reporting an error event each time it can't,
-    // until monitor-recovered and the readers it finds
+    // monitor thread then begins as during an outage, reporting it with one
+    // error event and establishing the context once a second until it can,
+    // then emitting monitor-recovered and the readers it finds
     LONG result = SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &context_);
     if (result == SCARD_S_SUCCESS) {
         contextValid_ = true;
-    } else if (result == static_cast<LONG>(SCARD_E_NO_SERVICE) ||
-               result == static_cast<LONG>(SCARD_E_SERVICE_STOPPED)) {
-        context_ = 0;
-        contextValid_ = false;
-    } else {
+    } else if (!IsServiceDown(result)) {
         NewPCSCError(env, result).ThrowAsJavaScriptException();
         return env.Undefined();
     }
@@ -305,6 +307,10 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
     // plugged in or unplugged between two waits ends the next one at once
     // rather than at the next re-list. SCARD_STATE_UNAWARE until known.
     DWORD pnpCurrentState = SCARD_STATE_UNAWARE;
+    // This outage has been reported with an error event: one per outage,
+    // not one a second (on Windows, the service is down for as long as no
+    // reader is plugged in)
+    bool outageReported = false;
 
     while (running_ && sessionActive->load()) {
         // The context died in a service outage and re-establishing it
@@ -316,9 +322,11 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
         if (!contextValid_) {
             LONG recovered = RecoverContext();
             if (recovered != SCARD_S_SUCCESS) {
-                // One error event a second while the service is down
-                EmitEvent("error", FormatPCSCError(recovered), 0, {},
-                          static_cast<DWORD>(recovered));
+                if (!outageReported) {
+                    EmitEvent("error", FormatPCSCError(recovered), 0, {},
+                              static_cast<DWORD>(recovered));
+                    outageReported = true;
+                }
                 // Still down a second after it failed: no reader can be
                 // used, so report them all detached (once). On Windows the
                 // service stops when its last reader is unplugged, so this
@@ -327,7 +335,13 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
                 PauseBeforeRetry(sessionActive);
                 continue;
             }
+            // stop() came while the context was being established, too
+            // late to cancel a wait: don't begin one
+            if (!running_ || !sessionActive->load()) {
+                break;
+            }
             // The recovery re-listed the readers
+            outageReported = false;
             iterationCount = 0;
             resyncedForUnknownReader = false;
         }
@@ -443,6 +457,8 @@ void ReaderMonitor::MonitorLoop(std::shared_ptr<std::atomic<bool>> sessionActive
             // can't spin.
             DWORD ucode = static_cast<DWORD>(result);
             if (IsContextFatal(result)) {
+                // The outage's error event is the one just emitted
+                outageReported = true;
                 // mutex_ also guards context_/contextValid_ against Stop()
                 // and the destructor reading them for SCardCancel
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -503,6 +519,10 @@ LONG ReaderMonitor::RecoverContext() {
     std::lock_guard<std::mutex> lock(mutex_);
     context_ = context;
     contextValid_ = true;
+    if (!running_) {
+        // stop() is waiting to join: no events for a stopped monitor
+        return SCARD_S_SUCCESS;
+    }
     // JS's own context died in the same outage. Tell it first, so it
     // replaces that context before handling the card events below.
     EmitEvent("monitor-recovered", "", 0, {});

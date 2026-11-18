@@ -75,9 +75,9 @@ export class Devices extends EventEmitter {
 
     /**
      * Start monitoring for device changes. If the PC/SC service isn't
-     * running yet, it waits for it as it does during an outage, emitting
-     * an 'error' about once a second until it is; without an 'error'
-     * listener it throws instead.
+     * running yet, it waits for it as it does during an outage, with one
+     * 'error' when it starts; without an 'error' listener it throws
+     * instead.
      */
     start(): void {
         if (this._running) {
@@ -101,7 +101,6 @@ export class Devices extends EventEmitter {
                 ) {
                     throw err;
                 }
-                this._context = null;
             }
 
             // A rejected queue from a previous session must not block this one
@@ -309,6 +308,16 @@ export class Devices extends EventEmitter {
      */
     private _recreateContext(): void {
         if (this._context) {
+            // monitor-recovered also comes when the monitor first gets a
+            // context, having started while the service was down. A context
+            // opened since (listReaders(), or for a card) still works, and
+            // closing it would break the readers and cards made from it.
+            try {
+                this._context.listReaders();
+                return;
+            } catch {
+                // Dead with the service: replace it
+            }
             try {
                 this._context.close();
             } catch {

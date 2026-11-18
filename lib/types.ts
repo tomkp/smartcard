@@ -165,7 +165,10 @@ export interface ReaderMonitor {
     readonly isRunning: boolean;
 
     /**
-     * Start monitoring for reader/card changes
+     * Start monitoring for reader/card changes. If the PC/SC service isn't
+     * running (yet), it starts anyway and handles that as an outage: one
+     * 'error' event, then 'monitor-recovered' and the readers it finds once
+     * the service is up. The same happens if the service stops later.
      */
     start(callback: (event: MonitorEvent) => void): void;
 
