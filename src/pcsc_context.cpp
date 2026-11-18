@@ -3,6 +3,7 @@
 #include "pcsc_errors.h"
 #include "pcsc_napi_error.h"
 #include "async_workers.h"
+#include <cmath>
 #include <cstring>
 
 Napi::Object PCSCContext::Init(Napi::Env env, Napi::Object exports) {
@@ -113,40 +114,59 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
 
     SCARDCONTEXT context = handle_->Get();
 
-    // Parse arguments: readers array (optional), timeout (optional)
     std::vector<std::string> readerNames;
     std::vector<DWORD> currentStates;
     DWORD timeout = INFINITE;
 
+    // Arguments: (readers?, timeout?) or (timeout). readers is an array of
+    // Readers, ReaderStates or reader names, or undefined/null for none; any
+    // first argument that isn't a number takes its place, so a timeout can
+    // always follow. timeout is in milliseconds: omitted, undefined, null or
+    // Infinity mean none, and a negative one is spent already.
     size_t argIndex = 0;
-
-    // First argument can be array of readers or timeout
-    if (info.Length() > 0 && info[0].IsArray()) {
-        Napi::Array readersArray = info[0].As<Napi::Array>();
-        for (uint32_t i = 0; i < readersArray.Length(); i++) {
-            Napi::Value item = readersArray.Get(i);
-            if (item.IsObject()) {
-                // It's a Reader object
-                Napi::Object obj = item.As<Napi::Object>();
-                if (obj.Has("name")) {
-                    readerNames.push_back(obj.Get("name").As<Napi::String>().Utf8Value());
-                    if (obj.Has("state")) {
-                        currentStates.push_back(obj.Get("state").As<Napi::Number>().Uint32Value());
-                    } else {
-                        currentStates.push_back(SCARD_STATE_UNAWARE);
+    if (info.Length() > 0 && !info[0].IsNumber()) {
+        if (info[0].IsArray()) {
+            Napi::Array readersArray = info[0].As<Napi::Array>();
+            for (uint32_t i = 0; i < readersArray.Length(); i++) {
+                Napi::Value item = readersArray.Get(i);
+                if (item.IsObject()) {
+                    // It's a Reader object
+                    Napi::Object obj = item.As<Napi::Object>();
+                    if (obj.Has("name")) {
+                        readerNames.push_back(obj.Get("name").As<Napi::String>().Utf8Value());
+                        if (obj.Has("state")) {
+                            currentStates.push_back(obj.Get("state").As<Napi::Number>().Uint32Value());
+                        } else {
+                            currentStates.push_back(SCARD_STATE_UNAWARE);
+                        }
                     }
+                } else if (item.IsString()) {
+                    readerNames.push_back(item.As<Napi::String>().Utf8Value());
+                    currentStates.push_back(SCARD_STATE_UNAWARE);
                 }
-            } else if (item.IsString()) {
-                readerNames.push_back(item.As<Napi::String>().Utf8Value());
-                currentStates.push_back(SCARD_STATE_UNAWARE);
             }
+        } else if (!info[0].IsUndefined() && !info[0].IsNull()) {
+            Napi::TypeError::New(env, "waitForChange(): readers must be an array")
+                .ThrowAsJavaScriptException();
+            return env.Null();
         }
-        argIndex++;
+        argIndex = 1;
     }
 
-    // Next argument is timeout
-    if (info.Length() > argIndex && info[argIndex].IsNumber()) {
-        timeout = info[argIndex].As<Napi::Number>().Uint32Value();
+    if (info.Length() > argIndex && !info[argIndex].IsUndefined() && !info[argIndex].IsNull()) {
+        double ms = info[argIndex].IsNumber() ? info[argIndex].As<Napi::Number>().DoubleValue() : NAN;
+        if (std::isnan(ms)) {
+            Napi::TypeError::New(env, "waitForChange(): timeout must be a number of milliseconds")
+                .ThrowAsJavaScriptException();
+            return env.Null();
+        }
+        if (ms >= static_cast<double>(INFINITE)) {
+            timeout = INFINITE;
+        } else if (ms <= 0) {
+            timeout = 0;
+        } else {
+            timeout = static_cast<DWORD>(ms);
+        }
     }
 
     // If no readers specified, get all readers

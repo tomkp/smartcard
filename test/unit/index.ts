@@ -3271,6 +3271,109 @@ describe('waitForChange() alongside other calls on its Context', () => {
     }
 });
 
+describe('waitForChange() arguments', () => {
+    type Ctx = {
+        listReaders(): { name: string; state: number }[];
+        waitForChange(readers?: unknown, timeout?: unknown): Promise<unknown>;
+        cancel(): void;
+        close(): void;
+    };
+    // A Context, or undefined (the test skipped) where there's no service
+    function open(t: { skip(message: string): void }): Ctx | undefined {
+        const addon = require(addonPath) as { Context: new () => Ctx };
+        try {
+            return new addon.Context();
+        } catch (err) {
+            const code = (err as { code?: number }).code;
+            if (code !== undefined && NO_SERVICE_CODES.includes(code)) {
+                t.skip(`no PC/SC service: ${(err as Error).message}`);
+                return undefined;
+            }
+            throw err;
+        }
+    }
+    const pending = (ms: number) =>
+        new Promise((r) => setTimeout(() => r(`still pending after ${ms} ms`), ms).unref());
+
+    // A timeout after an undefined or null readers argument was ignored,
+    // so with no reader attached the wait never ended
+    it('honours a timeout after an undefined or null readers argument', async (t) => {
+        const ctx = open(t);
+        if (!ctx) return;
+        try {
+            if (ctx.listReaders().length > 0) {
+                // Without readers it waits on the readers attached, from
+                // SCARD_STATE_UNAWARE, which returns at once
+                t.skip('readers attached, so a wait without readers returns at once');
+                return;
+            }
+            for (const readers of [undefined, null]) {
+                const started = Date.now();
+                const result: unknown = await Promise.race([
+                    ctx.waitForChange(readers, 200),
+                    pending(3000),
+                ]);
+                assert.deepStrictEqual(result, [], `waitForChange(${readers}, 200)`);
+                assert(Date.now() - started >= 150, `waitForChange(${readers}, 200) returned early`);
+            }
+        } finally {
+            ctx.cancel();
+            ctx.close();
+        }
+    });
+
+    it('rejects readers that are not an array, and a timeout that is not a number', (t) => {
+        const ctx = open(t);
+        if (!ctx) return;
+        try {
+            assert.throws(() => ctx.waitForChange('Reader Name', 100), TypeError);
+            assert.throws(() => ctx.waitForChange({ name: 'Reader Name' }, 100), TypeError);
+            assert.throws(() => ctx.waitForChange([], '100'), TypeError);
+            assert.throws(() => ctx.waitForChange(undefined, NaN), TypeError);
+        } finally {
+            ctx.close();
+        }
+    });
+
+    // Infinity converted to 0 (return at once), and a negative timeout
+    // wrapped round to an effectively endless one
+    it('treats an Infinity timeout as none, and a negative one as spent', async (t) => {
+        const ctx = open(t);
+        if (!ctx) return;
+        try {
+            // Only meaningful where a wait blocks: one that times out
+            const readers = ctx.listReaders();
+            const probe = await ctx.waitForChange(readers, 100);
+            if (!Array.isArray(probe) || probe.length > 0) {
+                t.skip(`a wait doesn't block here: ${JSON.stringify(probe)}`);
+                return;
+            }
+            const forever = ctx.waitForChange(readers, Infinity);
+            assert.match(String(await Promise.race([forever, pending(300)])), /still pending/);
+            ctx.cancel();
+            assert.strictEqual(await forever, null);
+
+            // Ends at once, not ~49 days later. (With no reader attached,
+            // macOS rejects a zero-timeout wait on the PnP entry with
+            // "Reader unavailable" rather than timing out: either will do.)
+            const spent: unknown = await Promise.race([
+                ctx.waitForChange(readers, -5).then(
+                    (r) => r,
+                    (err: Error) => `rejected: ${err.message}`
+                ),
+                pending(2000),
+            ]);
+            assert(
+                Array.isArray(spent) ? spent.length === 0 : /^rejected/.test(String(spent)),
+                `waitForChange(readers, -5): ${JSON.stringify(spent)}`
+            );
+        } finally {
+            ctx.cancel();
+            ctx.close();
+        }
+    });
+});
+
 describe('Idle reader monitor', () => {
     // With nothing changing, the monitor should sit in SCardGetStatusChange.
     // A wait that returned at once every time - say, a PnP dwCurrentState
