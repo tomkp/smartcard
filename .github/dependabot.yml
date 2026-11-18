@@ -1,0 +1,8 @@
+# The actions in .github/workflows are pinned by commit SHA (with the
+# version in a comment); this keeps those pins up to date
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

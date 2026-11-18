@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [master]
 
+# Nothing here writes to the repository
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -13,16 +17,20 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [20, 22, 24, 26]
+        # Shared with the sanitizers job below
+        node: &node-versions [20, 22, 24, 26]
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js ${{ matrix.node }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
+          cache: npm
 
       # pcscd lets tests that need a PC/SC service run, and vsmartcard
       # gives it a virtual reader and card (test/virtual/README.md). pcscd's
@@ -38,10 +46,10 @@ jobs:
           sudo pcscd --disable-polkit
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci --no-audit --no-fund
 
-      - name: Run unit tests with coverage
-        run: npm run test:coverage
+      - name: Run unit tests
+        run: npm run test:unit
 
       - name: Run native C++ tests
         run: npm run test:native
@@ -54,6 +62,12 @@ jobs:
           SMARTCARD_TEST_RESTART_PCSCD: 1
         run: npm run test:virtual
 
+      # Coverage on one job, after its tests: if the coverage tool can't
+      # run, the tests have still run
+      - name: Coverage (Linux, Node 24)
+        if: runner.os == 'Linux' && matrix.node == 24
+        run: npm run test:coverage
+
   # The tests again against an AddressSanitizer build of the addon, for
   # memory errors (use after free, overflows) and LeakSanitizer's leaks.
   # Node isn't built with ASan, so its runtime is preloaded into every
@@ -64,16 +78,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22, 24, 26]
+        node: *node-versions
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js ${{ matrix.node }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
+          cache: npm
 
       - name: Install PC/SC dependencies
         run: |
@@ -85,7 +102,7 @@ jobs:
 
       # Without the install script's plain build of the addon
       - name: Install dependencies
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Build the addon with AddressSanitizer
         env:
