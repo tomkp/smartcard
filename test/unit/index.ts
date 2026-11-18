@@ -2934,3 +2934,99 @@ describe('Addon loaded by several environments', () => {
         }
     });
 });
+
+describe('Reader monitor lifecycles in a worker', () => {
+    // How a monitor ends - stop(), a restart, or GC running its destructor
+    // - and then how its environment ends, in a worker and in the main
+    // thread. Mostly for the sanitizers job in CI, which runs the tests
+    // against an ASan build of the addon: these are the paths that freed
+    // or leaked memory before (spec findings 4 and 5). Runs in a child
+    // process, with --expose-gc, which reaches workers too.
+    for (const ending of ['exit', 'terminate'] as const) {
+        it(`survives stop, restart, two monitors and GC, then "${ending}"`, (t) => {
+            const lifecycles = `
+                async function lifecycles(addon, log) {
+                    const tick = (ms) => new Promise((r) => setTimeout(r, ms));
+                    // Stopped, restarted after a tick, and in the same tick
+                    // (a stale tsfn finalizer must not stop the new session)
+                    const m = new addon.ReaderMonitor();
+                    for (let i = 0; i < 2; i++) {
+                        m.start(() => {});
+                        await tick(50);
+                        m.stop();
+                    }
+                    m.start(() => {});
+                    m.stop();
+                    m.start(() => {});
+                    await tick(50);
+                    // Two at once, one stopped; the other left running
+                    const a = new addon.ReaderMonitor();
+                    const b = new addon.ReaderMonitor();
+                    a.start(() => {});
+                    b.start(() => {});
+                    await tick(50);
+                    a.stop();
+                    // Dropped while running: GC stops it
+                    (() => new addon.ReaderMonitor().start(() => {}))();
+                    await tick(50);
+                    for (let i = 0; i < 3; i++) {
+                        gc();
+                        await tick(20);
+                    }
+                    log('done');
+                    return [m, b];
+                }
+            `;
+            const workerSource = `
+                ${lifecycles}
+                const { parentPort } = require('node:worker_threads');
+                const addon = require(${JSON.stringify(addonPath)});
+                lifecycles(addon, (m) => parentPort.postMessage('worker ' + m)).then(
+                    () => {
+                        if (${JSON.stringify(ending)} === 'exit') {
+                            process.exit(0);
+                        }
+                    },
+                    (err) => parentPort.postMessage('worker failed: ' + err.message)
+                );
+            `;
+            const mainSource = `
+                ${lifecycles}
+                const { Worker } = require('node:worker_threads');
+                const addon = require(${JSON.stringify(addonPath)});
+                try {
+                    new addon.Context().close();
+                } catch (err) {
+                    if (!${JSON.stringify(NO_SERVICE_CODES)}.includes(err.code)) throw err;
+                    console.log('unavailable: ' + err.message);
+                    process.exit(0);
+                }
+                const worker = new Worker(${JSON.stringify(workerSource)}, { eval: true });
+                worker.on('message', (m) => {
+                    console.log(m);
+                    if (m === 'worker done' && ${JSON.stringify(ending)} === 'terminate') {
+                        worker.terminate();
+                    }
+                });
+                worker.on('exit', async () => {
+                    // The main thread's own monitors are left running at exit
+                    await lifecycles(addon, (m) => console.log('main ' + m));
+                    process.exit(0);
+                });
+            `;
+            const result = spawnSync(process.execPath, ['--expose-gc', '-e', mainSource], {
+                encoding: 'utf-8',
+                timeout: 30000,
+            });
+            if (result.stdout.includes('unavailable: ')) {
+                t.skip(`no PC/SC service: ${result.stdout.trim()}`);
+                return;
+            }
+            const output = `${result.stdout}\n${result.stderr}`;
+            assert.strictEqual(result.signal, null, output);
+            assert.strictEqual(result.status, 0, output);
+            assert.match(result.stdout, /worker done/, output);
+            assert.match(result.stdout, /main done/, output);
+        });
+    }
+});

@@ -53,3 +53,62 @@ jobs:
           SMARTCARD_VIRTUAL_CARD_REQUIRED: 1
           SMARTCARD_TEST_RESTART_PCSCD: 1
         run: npm run test:virtual
+
+  # The tests again against an AddressSanitizer build of the addon, for
+  # memory errors (use after free, overflows) and LeakSanitizer's leaks.
+  # Node isn't built with ASan, so its runtime is preloaded into every
+  # process; scripts/check-asan-logs.js then sorts the addon's problems
+  # from Node's own exit-time leaks.
+  sanitizers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install PC/SC dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcsclite-dev pcscd \
+            vsmartcard-vpcd vsmartcard-vpicc python3-pycryptodome
+          sudo systemctl stop pcscd.socket pcscd.service
+          sudo pcscd --disable-polkit
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build the addon with AddressSanitizer
+        env:
+          CFLAGS: -fsanitize=address -fno-omit-frame-pointer -g
+          CXXFLAGS: -fsanitize=address -fno-omit-frame-pointer -g
+          LDFLAGS: -fsanitize=address
+        run: npx node-gyp rebuild && npm run build:ts
+
+      # exitcode=0: Node's own leaks would otherwise fail every process;
+      # the next step judges the reports instead. A memory error still
+      # aborts the process that hits it.
+      - name: Run the tests under AddressSanitizer
+        timeout-minutes: 15
+        env:
+          SMARTCARD_VIRTUAL_CARD_REQUIRED: 1
+          SMARTCARD_TEST_RESTART_PCSCD: 1
+        run: |
+          mkdir -p "$RUNNER_TEMP/asan"
+          export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
+          export ASAN_OPTIONS="log_path=$RUNNER_TEMP/asan/asan:exitcode=0:detect_leaks=1:fast_unwind_on_malloc=0:max_free_fill_size=4096"
+          node --test dist/test/unit/index.js
+          node --test dist/test/virtual/index.js
+          node dist/test/virtual/with-card.js node --test dist/test/integration/index.js
+
+      - name: Check the sanitizer reports
+        if: success() || failure()
+        run: node scripts/check-asan-logs.js "$RUNNER_TEMP/asan"
