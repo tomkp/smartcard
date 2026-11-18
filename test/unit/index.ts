@@ -3042,9 +3042,9 @@ describe('Reader monitor lifecycles in a worker', () => {
     // sanitizers job in CI, which runs the tests against an ASan build of
     // the addon: these are the paths that leaked (spec finding 5) or used
     // freed memory (finding 4) before. ASan checks the addon's own memory
-    // accesses; a use of memory Node itself freed, as in finding 4, shows
-    // only if it crashes Node. Runs in a child process, with --expose-gc,
-    // which reaches workers too.
+    // accesses, not a use of memory Node itself freed inside Node, as in
+    // finding 4: that shows only if it crashes. Runs in a child process,
+    // with --expose-gc, which reaches workers too.
     for (const ending of ['exit', 'terminate'] as const) {
         it(`survives stop, restart, two monitors and GC, then "${ending}"`, (t) => {
             const lifecycles = `

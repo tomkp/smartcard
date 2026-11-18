@@ -98,7 +98,11 @@ jobs:
       # process; the next step judges the reports instead. abort_on_error:
       # a memory error still kills the process that hits it (SIGABRT), so
       # the tests fail too. allow_user_segv_handler=0 keeps ASan's SIGSEGV
-      # handler (V8 installs its own), so a crash leaves a report.
+      # handler (V8 installs its own), so a crash leaves a report. Freed
+      # memory isn't scribbled (max_free_fill_size): that would also catch
+      # uninstrumented Node code reading memory Node freed, but it turns a
+      # Node bug into a crash at exit (node_napi_env__::DrainFinalizerQueue
+      # running on its freed napi_env), which the addon can't fix.
       - name: Run the tests under AddressSanitizer
         timeout-minutes: 15
         env:
@@ -107,7 +111,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/asan"
           export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
-          export ASAN_OPTIONS="log_path=$RUNNER_TEMP/asan/asan:exitcode=0:abort_on_error=1:allow_user_segv_handler=0:handle_abort=1:detect_leaks=1:fast_unwind_on_malloc=0:max_free_fill_size=4096"
+          export ASAN_OPTIONS="log_path=$RUNNER_TEMP/asan/asan:exitcode=0:abort_on_error=1:allow_user_segv_handler=0:handle_abort=1:detect_leaks=1:fast_unwind_on_malloc=0"
           node --test dist/test/unit/index.js
           node --test dist/test/virtual/index.js
           node dist/test/virtual/with-card.js node --test dist/test/integration/index.js
