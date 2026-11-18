@@ -15,6 +15,7 @@ import { wrapCard } from './card-wrapper';
 import {
     createPCSCError,
     isUnresponsiveCardError,
+    ServiceNotRunningError,
     toPCSCError,
 } from './errors';
 
@@ -73,7 +74,10 @@ export class Devices extends EventEmitter {
     }
 
     /**
-     * Start monitoring for device changes
+     * Start monitoring for device changes. If the PC/SC service isn't
+     * running yet, it waits for it as it does during an outage, with one
+     * 'error' when it starts; without an 'error' listener it throws
+     * instead.
      */
     start(): void {
         if (this._running) {
@@ -81,8 +85,23 @@ export class Devices extends EventEmitter {
         }
 
         try {
-            // Create context for card connections
-            this._context = new this._Context();
+            // Create context for card connections. If the service isn't
+            // running yet (pcscd not started, or on Windows no reader
+            // plugged in), start without one: the native monitor waits for
+            // the service, as during an outage, and the context is created
+            // when it reports the service back (monitor-recovered) or a
+            // card needs one (_ensureContext). Unless nothing would hear
+            // about it: then fail, as before.
+            try {
+                this._context = new this._Context();
+            } catch (err) {
+                if (
+                    !(toPCSCError(err) instanceof ServiceNotRunningError) ||
+                    this.listenerCount('error') === 0
+                ) {
+                    throw err;
+                }
+            }
 
             // A rejected queue from a previous session must not block this one
             this._eventQueue = Promise.resolve();
@@ -289,6 +308,16 @@ export class Devices extends EventEmitter {
      */
     private _recreateContext(): void {
         if (this._context) {
+            // monitor-recovered also comes when the monitor first gets a
+            // context, having started while the service was down. A context
+            // opened since (listReaders(), or for a card) still works, and
+            // closing it would break the readers and cards made from it.
+            try {
+                this._context.listReaders();
+                return;
+            } catch {
+                // Dead with the service: replace it
+            }
             try {
                 this._context.close();
             } catch {

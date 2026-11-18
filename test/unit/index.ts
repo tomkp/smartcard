@@ -19,6 +19,7 @@ import {
     SCARD_PROTOCOL_T1,
 } from '../helpers/mock';
 import type { Card, MonitorEvent, ReaderEventInfo } from '../../lib/types';
+import { ServiceNotRunningError } from '../../lib/errors';
 
 describe('MockCard', () => {
     it('should create a mock card with protocol and ATR', () => {
@@ -2979,6 +2980,142 @@ describe('Service outage recovery', () => {
 // SCARD_E_SERVICE_STOPPED.
 const addonPath = resolve(__dirname, '../../../build/Release/smartcard_napi.node');
 const NO_SERVICE_CODES = [0x8010001d, 0x8010001e];
+
+// On Windows the Smart Card service stops while no reader is plugged in, so
+// an app started then got one error and never saw a reader until it
+// restarted. Now it waits for the service as it does during an outage.
+describe('Starting while the PC/SC service is not running yet', () => {
+    it('waits for the service, then attaches its readers and connects their cards', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
+        const mockReader = new MockReader('ACR122U', mockCard);
+        let serviceUp = false;
+        let created = 0;
+        const MockDevices = createMockDevices({
+            Context: function () {
+                if (!serviceUp) {
+                    throw new ServiceNotRunningError();
+                }
+                created++;
+                const context = new MockContext();
+                context.addReader(mockReader);
+                return context;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+        const mockMonitor = new MockReaderMonitor();
+        const devices = new MockDevices();
+        const errors: Error[] = [];
+        const inserted: string[] = [];
+        devices.on('error', (err: Error) => errors.push(err));
+        devices.on('card-inserted', ({ reader }: { reader: { name: string } }) =>
+            inserted.push(reader.name)
+        );
+
+        devices.start();
+        assert(mockMonitor.isRunning, 'the monitor waits for the service');
+        assert.deepStrictEqual(devices.listReaders(), []);
+
+        // The native monitor, as during an outage: an error while the
+        // service is down, then monitor-recovered and the readers it finds
+        mockMonitor.emitError('Service not available (0x8010001D)', 0x8010001d);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        serviceUp = true;
+        mockMonitor.recover();
+        mockMonitor.attachReader(mockReader);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        assert.strictEqual(errors.length, 1, "only the monitor's own error");
+        assert.deepStrictEqual(inserted, ['ACR122U']);
+        assert.strictEqual(created, 1, 'a context once the service is back');
+        devices.stop();
+    });
+
+    // monitor-recovered comes when the monitor first gets a context too:
+    // a context opened since then works, and must survive it
+    it('keeps a context opened before the monitor reports the service back', async () => {
+        const mockReader = new MockReader('ACR122U');
+        let serviceUp = false;
+        const contexts: MockContext[] = [];
+        const mockMonitor = new MockReaderMonitor();
+        const MockDevices = createMockDevices({
+            Context: function () {
+                if (!serviceUp) {
+                    throw new ServiceNotRunningError();
+                }
+                const context = new MockContext();
+                context.addReader(mockReader);
+                contexts.push(context);
+                return context;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+        const devices = new MockDevices();
+        devices.on('error', () => {});
+        devices.start();
+        serviceUp = true;
+        // The app lists the readers before the monitor's next retry
+        assert.strictEqual(devices.listReaders().length, 1);
+        mockMonitor.recover();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.strictEqual(contexts.length, 1, 'not replaced');
+        assert(contexts[0].isValid, 'not closed');
+        devices.stop();
+    });
+
+    it('throws from start() instead, with no error listener', () => {
+        const mockMonitor = new MockReaderMonitor();
+        const MockDevices = createMockDevices({
+            Context: function () {
+                throw new ServiceNotRunningError();
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+        const devices = new MockDevices();
+        assert.throws(() => devices.start(), ServiceNotRunningError);
+        assert.strictEqual(mockMonitor.isRunning, false);
+    });
+
+    // The opposite of the tests around it: this runs only where there
+    // really is no PC/SC service (CI's Windows runners), and skips elsewhere
+    it('lets a native monitor start without the service, reporting the outage once', async (t) => {
+        const addon = require(addonPath) as {
+            Context: new () => { close(): void };
+            ReaderMonitor: new () => {
+                start(callback: (event: MonitorEvent) => void): void;
+                stop(): void;
+            };
+        };
+        try {
+            new addon.Context().close();
+            t.skip('there is a PC/SC service here');
+            return;
+        } catch (err) {
+            const code = (err as { code?: number }).code;
+            if (code === undefined || !NO_SERVICE_CODES.includes(code)) {
+                throw err;
+            }
+        }
+        const monitor = new addon.ReaderMonitor();
+        const errors: MonitorEvent[] = [];
+        monitor.start((event) => {
+            if (event.type === 'error') errors.push(event);
+        });
+        try {
+            // Several of its once-a-second retries
+            await new Promise((resolve) => setTimeout(resolve, 2500));
+        } finally {
+            monitor.stop();
+        }
+        assert.strictEqual(errors.length, 1, 'one error for the outage, not one a second');
+        assert(NO_SERVICE_CODES.includes((errors[0].code ?? 0) >>> 0), JSON.stringify(errors[0]));
+    });
+});
 
 describe('Worker teardown with native work outstanding', () => {
     // A worker ends - exits, or is terminated - while the addon still has

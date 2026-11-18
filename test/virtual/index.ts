@@ -180,6 +180,36 @@ describe('Virtual card', { skip: REQUIRED ? false : reason }, () => {
         }
     );
 
+    // On Windows the Smart Card service is down while no reader is plugged
+    // in; here pcscd stands in for it. Devices used to report the error
+    // and never see a reader until it was restarted.
+    it(
+        'Devices started while pcscd is down attaches the readers once it starts',
+        {
+            timeout: 60000,
+            skip: RESTART_PCSCD ? false : 'set SMARTCARD_TEST_RESTART_PCSCD to let it restart pcscd',
+        },
+        async () => {
+            const { devices, errors, report } = watch();
+            const attached: string[] = [];
+            devices.on('reader-attached', ({ name }) => attached.push(name));
+            try {
+                await pcscd.stop();
+                devices.start();
+                await new Promise((r) => setTimeout(r, 2500));
+                assert.strictEqual(errors.length, 1, `one error for the outage: ${report()}`);
+                assert.strictEqual(attached.length, 0, `no readers while pcscd is down: ${report()}`);
+
+                await pcscd.start();
+                await waitFor(() => attached.includes(READER), 'reader-attached', report);
+                assert.strictEqual(errors.length, 1, report());
+            } finally {
+                devices.stop();
+                await pcscd.ensureRunning();
+            }
+        }
+    );
+
     // Each environment that loads the addon (main thread, workers) builds
     // its own Cards; before #154 they shared one constructor reference,
     // and a worker's exit left the others using a dead one.
