@@ -3271,6 +3271,51 @@ describe('waitForChange() alongside other calls on its Context', () => {
     }
 });
 
+describe('waitForChange() arguments', () => {
+    // A timeout after an undefined or null readers argument was ignored,
+    // so with no reader attached the wait never ended
+    it('honours a timeout after an undefined or null readers argument', async (t) => {
+        const addon = require(addonPath) as {
+            Context: new () => {
+                listReaders(): unknown[];
+                waitForChange(readers: unknown, timeout: number): Promise<unknown>;
+                cancel(): void;
+                close(): void;
+            };
+        };
+        let context;
+        try {
+            context = new addon.Context();
+        } catch (err) {
+            const code = (err as { code?: number }).code;
+            if (code !== undefined && NO_SERVICE_CODES.includes(code)) {
+                t.skip(`no PC/SC service: ${(err as Error).message}`);
+                return;
+            }
+            throw err;
+        }
+        const ctx = context;
+        try {
+            if (ctx.listReaders().length > 0) {
+                // Without readers it waits on the readers attached, from
+                // SCARD_STATE_UNAWARE, which returns at once
+                t.skip('readers attached, so a wait without readers returns at once');
+                return;
+            }
+            for (const readers of [undefined, null]) {
+                const result = await Promise.race([
+                    ctx.waitForChange(readers, 200),
+                    new Promise((r) => setTimeout(() => r('still pending after 3 s'), 3000)),
+                ]);
+                assert.deepStrictEqual(result, [], `waitForChange(${readers}, 200)`);
+            }
+        } finally {
+            ctx.cancel();
+            ctx.close();
+        }
+    });
+});
+
 describe('Idle reader monitor', () => {
     // With nothing changing, the monitor should sit in SCardGetStatusChange.
     // A wait that returned at once every time - say, a PnP dwCurrentState

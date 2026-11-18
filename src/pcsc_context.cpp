@@ -120,8 +120,12 @@ Napi::Value PCSCContext::WaitForChange(const Napi::CallbackInfo& info) {
 
     size_t argIndex = 0;
 
-    // First argument can be array of readers or timeout
-    if (info.Length() > 0 && info[0].IsArray()) {
+    // First argument can be array of readers or timeout. undefined or null
+    // stands for no readers, so a timeout can follow it:
+    // waitForChange(undefined, 5000)
+    if (info.Length() > 0 && (info[0].IsUndefined() || info[0].IsNull())) {
+        argIndex++;
+    } else if (info.Length() > 0 && info[0].IsArray()) {
         Napi::Array readersArray = info[0].As<Napi::Array>();
         for (uint32_t i = 0; i < readersArray.Length(); i++) {
             Napi::Value item = readersArray.Get(i);
