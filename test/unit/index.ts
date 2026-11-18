@@ -2747,6 +2747,124 @@ describe('Service outage recovery', () => {
 
         devices.stop();
     });
+
+    // Replacing the context can fail too, say if the service is gone
+    // again: Devices used to stay without one, so every later insertion
+    // silently found no reader, until monitoring was restarted
+    it('creates a context again when replacing it after the outage failed', async () => {
+        const mockCard = new MockCard(1, Buffer.from([0x3b]));
+        const mockReader = new MockReader('ACR122U');
+        const deadContext = new MockContext();
+        const liveContext = new MockContext();
+        deadContext.addReader(mockReader);
+        liveContext.addReader(mockReader);
+        const noService = Object.assign(new Error('Service not available'), {
+            code: 0x8010001d,
+        });
+        const contexts: (MockContext | Error)[] = [deadContext, noService, liveContext];
+        const mockMonitor = new MockReaderMonitor();
+        mockMonitor.attachReader(mockReader);
+
+        const MockDevices = createMockDevices({
+            Context: function () {
+                const next = contexts.shift();
+                if (next instanceof Error) {
+                    throw next;
+                }
+                return next;
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return mockMonitor;
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const inserted: Card[] = [];
+        const errors: Error[] = [];
+        devices.on('card-inserted', ({ card }: { card: Card }) => inserted.push(card));
+        devices.on('error', (err: Error) => errors.push(err));
+
+        devices.start();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        deadContext.close();
+        mockMonitor.emitError('Service was stopped (0x8010001E)', 0x8010001e);
+        mockMonitor.recover();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        // The outage's error, and the failed replacement's
+        assert.strictEqual(errors.length, 2);
+        assert.strictEqual((errors[1] as Error & { code?: number }).code, 0x8010001d);
+
+        // Devices tries again when it next needs a context
+        assert.deepStrictEqual(
+            devices.listReaders().map((r: { name: string }) => r.name),
+            ['ACR122U']
+        );
+        mockMonitor.insertCard('ACR122U', mockCard);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.strictEqual(inserted.length, 1);
+        assert.strictEqual(errors.length, 2);
+        assert.strictEqual(contexts.length, 0);
+
+        devices.stop();
+    });
+
+    // A monitor still delivers the events it queued before stop(). After
+    // a stop() and start() in the same tick they used to reach the new
+    // session: a stale monitor-recovered closed its healthy context (and
+    // with it every card connected through it).
+    it("drops a stopped session's events after a same-tick restart", async () => {
+        const mockReader = new MockReader('ACR122U');
+        const firstContext = new MockContext();
+        const secondContext = new MockContext();
+        firstContext.addReader(mockReader);
+        secondContext.addReader(mockReader);
+        const contexts = [firstContext, secondContext];
+        const firstMonitor = new MockReaderMonitor();
+        const secondMonitor = new MockReaderMonitor();
+        const monitors = [firstMonitor, secondMonitor];
+        // The first monitor's callback, as its queued events would reach it
+        let stale: ((event: MonitorEvent) => void) | null = null;
+        const start = firstMonitor.start.bind(firstMonitor);
+        firstMonitor.start = (callback: (event: MonitorEvent) => void) => {
+            stale = callback;
+            start(callback);
+        };
+
+        let created = 0;
+        const MockDevices = createMockDevices({
+            Context: function () {
+                created++;
+                return contexts.shift() ?? new MockContext();
+            } as unknown as new () => MockContext,
+            ReaderMonitor: function () {
+                return monitors.shift();
+            } as unknown as new () => MockReaderMonitor,
+        });
+
+        const devices = new MockDevices();
+        const attached: string[] = [];
+        devices.on('reader-attached', ({ name }: { name: string }) => attached.push(name));
+        devices.start();
+        const recovered: MonitorEvent = { type: 'monitor-recovered', reader: '', state: 0, atr: null };
+        const ghost: MonitorEvent = { type: 'reader-attached', reader: 'Ghost', state: 0x10, atr: null };
+
+        // Queued before the restart, processed after it...
+        stale!(recovered);
+        devices.stop();
+        devices.start();
+        // ...and delivered after it
+        stale!(recovered);
+        stale!(ghost);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        assert.strictEqual(created, 2, 'no context replaced');
+        assert(firstContext.isValid === false, 'the first session closed its own context');
+        assert(secondContext.isValid, "the new session's context is still open");
+        assert.deepStrictEqual(attached, []);
+
+        devices.stop();
+    });
 });
 
 // The native addon itself, for tests that need real PC/SC. They skip when

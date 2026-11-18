@@ -90,9 +90,13 @@ export class Devices extends EventEmitter {
             // Create native monitor
             this._monitor = new this._ReaderMonitor();
 
-            // Start native monitoring with callback
+            // Start native monitoring with callback. Events carry this
+            // session's generation: a stopped monitor can still deliver
+            // events it had queued, and after a same-tick stop()/start()
+            // they would otherwise land in the new session.
+            const generation = this._generation;
             this._monitor.start((event: MonitorEvent) => {
-                this._handleEvent(event);
+                this._handleEvent(event, generation);
             });
 
             // Set only after everything succeeded, so a partial failure
@@ -173,11 +177,11 @@ export class Devices extends EventEmitter {
      * List currently known readers
      */
     listReaders(): Reader[] {
-        if (!this._context || !this._context.isValid) {
+        if (!this._running) {
             return [];
         }
         try {
-            return this._context.listReaders();
+            return this._ensureContext().listReaders();
         } catch {
             return [];
         }
@@ -211,12 +215,12 @@ export class Devices extends EventEmitter {
      * Handle events from native monitor
      * Queues events to prevent race conditions when multiple events arrive concurrently
      */
-    private _handleEvent(event: MonitorEvent): void {
+    private _handleEvent(event: MonitorEvent, generation: number): void {
         // Chain this event onto the queue to serialize processing. The catch
         // keeps the chain alive: a rejected link would otherwise silently
         // stop all future event processing.
         this._eventQueue = this._eventQueue
-            .then(() => this._processEvent(event))
+            .then(() => this._processEvent(event, generation))
             .catch((err) => this._safeEmitError(err));
     }
 
@@ -234,8 +238,13 @@ export class Devices extends EventEmitter {
     /**
      * Process a single event (called sequentially via queue)
      */
-    private async _processEvent(event: MonitorEvent): Promise<void> {
-        if (!this._running) {
+    private async _processEvent(
+        event: MonitorEvent,
+        generation: number
+    ): Promise<void> {
+        // Dropped once monitoring stopped, even if it has started again:
+        // the event belongs to the earlier session
+        if (!this._running || this._generation !== generation) {
             return;
         }
 
@@ -290,9 +299,22 @@ export class Devices extends EventEmitter {
         try {
             this._context = new this._Context();
         } catch (err) {
+            // _ensureContext() tries again when a context is next needed
             this._context = null;
             this._safeEmitError(err);
         }
+    }
+
+    /**
+     * The context for listing readers and connecting cards, created here
+     * if replacing it after a service outage failed: one failure must not
+     * leave Devices without a context until it is restarted.
+     */
+    private _ensureContext(): Context {
+        if (!this._context) {
+            this._context = new this._Context();
+        }
+        return this._context;
     }
 
     /**
@@ -372,9 +394,7 @@ export class Devices extends EventEmitter {
                         return;
                     }
                 }
-                const readers = this._context
-                    ? this._context.listReaders()
-                    : [];
+                const readers = this._ensureContext().listReaders();
                 reader = readers.find((r) => r.name === readerName);
                 if (reader) {
                     break;
