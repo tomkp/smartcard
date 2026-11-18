@@ -1,8 +1,10 @@
 name: Spec
 
-# Model-check the TLA+ specs of the reader monitor (spec/README.md).
-# TLC reads only spec/, so this runs when the specs change. A change to
-# src/reader_monitor.cpp should update the specs in the same PR.
+# Model-check the TLA+ specs of the reader monitor and waitForChange()
+# (spec/README.md). TLC reads only spec/, so this runs when the specs
+# change. A change to src/reader_monitor.cpp, or to waitForChange() in
+# src/async_workers.cpp and src/pcsc_context.cpp, should update the specs
+# in the same PR.
 on:
   push:
     branches: [master]
