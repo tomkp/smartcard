@@ -66,7 +66,7 @@ Two ideas have no counterpart in Z:
 | `Lifecycle-notimeout` | What if the wait had no timeout? | `stop()` can hang forever |
 | `Lifecycle-teardown` | Node tears down the environment while the monitor runs | No errors |
 | `Lifecycle-v3.8-teardown` | 3.8.0: the same | Use-after-free (finding 4) |
-| `Lifecycle-hookorder` | What if `start()` added its teardown hook before creating the tsfn? | Use-after-free |
+| `Lifecycle-hookorder` | What if `start()` added its teardown hook before creating the tsfn? | No errors: the order doesn't matter |
 | `Lifecycle-pre157-delivery` | Teardown with events still queued, delivered as before #157 | `std::terminate` (finding 5) |
 | `Lifecycle-pre157-leak` | The same: the events Node drains | Leaked (finding 5) |
 | `Events-current` | The current monitor, with pcsc-lite 2.3.0 or later: every event makes sense, JS learns every reader and card, and the loop keeps waiting (3 readers, 6 world steps) | No errors |
@@ -165,10 +165,15 @@ has already deleted. If the destructor runs after that, its
 `tsfn_.Release()` ([`reader_monitor.cpp:75-78`](https://github.com/tomkp/smartcard/blob/f3d782eb1a57603ae1934dc90dba2feeb9715281/src/reader_monitor.cpp#L75-L78)) touches the deleted tsfn as
 well.
 
-At teardown, Node's tsfn cleanup hook deletes the tsfn whatever its thread
-count. In [`src/node_api.cc`](https://github.com/nodejs/node/blob/v22.x/src/node_api.cc), `Cleanup` calls `CloseHandlesAndMaybeDelete(true)`,
-which reaches `Finalize`, then `EmptyQueueAndDelete`, then `delete this`. The
-finalizer's `sessionActive = false` is only checked at the top of the loop
+At teardown, Node deletes the tsfn whatever its thread count. In
+[`src/node_api.cc`](https://github.com/nodejs/node/blob/v22.x/src/node_api.cc),
+the tsfn's cleanup hook, `Cleanup`, calls `CloseHandlesAndMaybeDelete(true)`,
+which marks it closing and schedules `uv_close`. Once every cleanup hook
+has run, Node closes handles
+([`Environment::RunCleanup`](https://github.com/nodejs/node/blob/v22.x/src/env.cc)),
+and the close callback runs `Finalize`, then `EmptyQueueAndDelete`, then
+`delete this`. Until then a push to the closing tsfn is refused
+(`napi_closing`), which is harmless. The finalizer's `sessionActive = false` is only checked at the top of the loop
 and just after the wait, so a thread that has already passed those checks
 still pushes.
 
@@ -228,10 +233,12 @@ the loop runs once more) before the cleanup hooks.
   cancel does nothing and `join()` waits for the timeout. With `INFINITE` it
   would wait forever (`Lifecycle-notimeout`). So `stop()` can block the JS
   thread for up to about 1 s, by design.
-- **The order of the teardown hook** (fix 4). `start()` adds its env
-  cleanup hook *after* creating the tsfn. Node runs cleanup hooks newest
-  first, so the monitor stops while the tsfn is alive. Added before, the
-  tsfn's hook runs first and the crash comes back (`Lifecycle-hookorder`).
+- **When the teardown hook joins** (fix 4). The hook must join the
+  monitor thread before Node closes handles, and Node closes them only
+  once every cleanup hook has run. So the order of `start()`'s hook and
+  the tsfn's own doesn't matter (`Lifecycle-hookorder` passes): the tsfn's
+  hook only starts closing it. Taking the join out of the hook does
+  matter: TLC then finds the use-after-free again.
 
 ## Fixes
 
@@ -258,12 +265,10 @@ fix 4.
    error path (one `error` a second, still re-listing), so a lasting failure
    can't spin.
 4. **Teardown.** `start()` adds an environment cleanup hook
-   (`napi_add_env_cleanup_hook`) straight after creating the tsfn. Node runs
-   cleanup hooks newest first
-   ([`src/cleanup_queue.cc`](https://github.com/nodejs/node/blob/v24.x/src/cleanup_queue.cc)),
-   so at teardown this hook runs before the tsfn's own. It stops the monitor
-   as `stop()` does (cancel, join, release), and only then does Node delete
-   the tsfn. `stop()` and the destructor remove the hook.
+   (`napi_add_env_cleanup_hook`) after creating the tsfn. At teardown it
+   stops the monitor as `stop()` does (cancel, join, release). Node deletes
+   the tsfn only once every cleanup hook has run, so the monitor thread is
+   gone by then. `stop()` and the destructor remove the hook.
    `Lifecycle-teardown` checks this design, including that the hook returns
    (`TeardownReturns`); with the join taken out of the hook, TLC finds the
    use-after-free again. A worker that exits or is terminated with its

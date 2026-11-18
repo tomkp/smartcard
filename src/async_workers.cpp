@@ -58,9 +58,10 @@ Napi::Promise WaitForChangeWorker::Start(
     }
     // From here OnDone frees self
 
-    // Added after the tsfn, so that at environment teardown it runs before
-    // the tsfn's own hook: Node runs them newest first. Without it nothing
-    // could end the wait at teardown, so no wait is started.
+    // At environment teardown this ends the wait and joins its thread.
+    // Node deletes the tsfn only once every cleanup hook has run, so the
+    // thread is gone by then. Without it nothing could end the wait at
+    // teardown, so no wait is started.
     self->cleanupHookAdded_ =
         napi_add_env_cleanup_hook(env, OnEnvCleanup, self) == napi_ok;
 

@@ -201,7 +201,9 @@ Napi::Value ReaderMonitor::Start(const Napi::CallbackInfo& info) {
     );
     tsfnActive_ = true;
 
-    // Added after the tsfn, so that at environment teardown it runs first
+    // At environment teardown this stops the monitor thread. Node deletes
+    // the tsfn only once every cleanup hook has run, so the thread is gone
+    // by then (spec/README.md, fix 4)
     cleanupHookAdded_ =
         napi_add_env_cleanup_hook(env, OnEnvCleanup, this) == napi_ok;
 
