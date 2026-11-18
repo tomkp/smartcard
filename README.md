@@ -267,6 +267,8 @@ class Context {
 }
 ```
 
+`waitForChange()` resolves with the readers' new states, with `[]` when the timeout passes (none means wait forever), or with `null` when cancelled. Each pending wait has a PC/SC connection of its own, so the context stays usable meanwhile: `listReaders()`, `connect()` and further waits all work. `cancel()` ends every wait pending on the context, even one that has only just been called, and `close()` ends them the same way.
+
 ### Reader
 
 Represents a smart card reader.
@@ -332,6 +334,13 @@ class Devices extends EventEmitter {
     on(event: 'error', listener: (error: Error) => void): this;
 }
 ```
+
+#### Service outages
+
+If the PC/SC service stops (pcscd restarting, say, or the Windows Smart Card service, which stops when the last reader is unplugged), `Devices` keeps running, reports the outage through `error` events, and recovers by itself:
+
+- **The service is back within about a second:** every card still in a reader is reported `card-removed`, then `card-inserted` with a new `Card`. The old `Card`'s connection died with the service.
+- **It stays down longer:** every reader is reported `reader-detached`, with `card-removed` first for its card. When the service returns, the readers are attached again, with their cards.
 
 ### Auto GET RESPONSE (T=0 Protocol)
 
