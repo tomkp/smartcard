@@ -2937,11 +2937,13 @@ describe('Addon loaded by several environments', () => {
 
 describe('Reader monitor lifecycles in a worker', () => {
     // How a monitor ends - stop(), a restart, or GC running its destructor
-    // - and then how its environment ends, in a worker and in the main
-    // thread. Mostly for the sanitizers job in CI, which runs the tests
-    // against an ASan build of the addon: these are the paths that freed
-    // or leaked memory before (spec findings 4 and 5). Runs in a child
-    // process, with --expose-gc, which reaches workers too.
+    // - and then how its environment ends, in a worker. Mostly for the
+    // sanitizers job in CI, which runs the tests against an ASan build of
+    // the addon: these are the paths that leaked (spec finding 5) or used
+    // freed memory (finding 4) before. ASan checks the addon's own memory
+    // accesses; a use of memory Node itself freed, as in finding 4, shows
+    // only if it crashes Node. Runs in a child process, with --expose-gc,
+    // which reaches workers too.
     for (const ending of ['exit', 'terminate'] as const) {
         it(`survives stop, restart, two monitors and GC, then "${ending}"`, (t) => {
             const lifecycles = `
@@ -2959,6 +2961,9 @@ describe('Reader monitor lifecycles in a worker', () => {
                     m.stop();
                     m.start(() => {});
                     await tick(50);
+                    if (!m.isRunning) {
+                        throw new Error('the monitor restarted in the same tick stopped');
+                    }
                     // Two at once, one stopped; the other left running
                     const a = new addon.ReaderMonitor();
                     const b = new addon.ReaderMonitor();
@@ -2966,12 +2971,21 @@ describe('Reader monitor lifecycles in a worker', () => {
                     b.start(() => {});
                     await tick(50);
                     a.stop();
-                    // Dropped while running: GC stops it
-                    (() => new addon.ReaderMonitor().start(() => {}))();
+                    // Dropped while running: GC runs its destructor
+                    let collected = false;
+                    const registry = new FinalizationRegistry(() => (collected = true));
+                    (() => {
+                        const dropped = new addon.ReaderMonitor();
+                        dropped.start(() => {});
+                        registry.register(dropped, null);
+                    })();
                     await tick(50);
-                    for (let i = 0; i < 3; i++) {
+                    for (let i = 0; i < 20 && !collected; i++) {
                         gc();
                         await tick(20);
+                    }
+                    if (!collected) {
+                        throw new Error('the dropped monitor was not collected');
                     }
                     log('done');
                     return [m, b];
@@ -2982,14 +2996,23 @@ describe('Reader monitor lifecycles in a worker', () => {
                 const { parentPort } = require('node:worker_threads');
                 const addon = require(${JSON.stringify(addonPath)});
                 lifecycles(addon, (m) => parentPort.postMessage('worker ' + m)).then(
-                    () => {
+                    (running) => {
+                        // Keep the monitors left running until the end
+                        globalThis.running = running;
                         if (${JSON.stringify(ending)} === 'exit') {
                             process.exit(0);
                         }
                     },
-                    (err) => parentPort.postMessage('worker failed: ' + err.message)
+                    (err) => {
+                        parentPort.postMessage('worker failed: ' + err.message);
+                        process.exit(1);
+                    }
                 );
             `;
+            // The main thread goes through the same, once (it ends the same
+            // way either time), and stops its monitors: process.exit() runs
+            // no cleanup in the main thread, so they would only race the
+            // PC/SC library's own teardown
             const mainSource = `
                 ${lifecycles}
                 const { Worker } = require('node:worker_threads');
@@ -3009,8 +3032,10 @@ describe('Reader monitor lifecycles in a worker', () => {
                     }
                 });
                 worker.on('exit', async () => {
-                    // The main thread's own monitors are left running at exit
-                    await lifecycles(addon, (m) => console.log('main ' + m));
+                    if (${JSON.stringify(ending)} === 'exit') {
+                        const running = await lifecycles(addon, (m) => console.log('main ' + m));
+                        running.forEach((monitor) => monitor.stop());
+                    }
                     process.exit(0);
                 });
             `;
@@ -3026,7 +3051,9 @@ describe('Reader monitor lifecycles in a worker', () => {
             assert.strictEqual(result.signal, null, output);
             assert.strictEqual(result.status, 0, output);
             assert.match(result.stdout, /worker done/, output);
-            assert.match(result.stdout, /main done/, output);
+            if (ending === 'exit') {
+                assert.match(result.stdout, /main done/, output);
+            }
         });
     }
 });
