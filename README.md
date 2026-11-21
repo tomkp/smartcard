@@ -16,7 +16,7 @@
 
 Stable PC/SC smart card bindings for Node.js.
 
-Works with Node.js 18+ without recompilation. Built on N-API for long-term stability.
+Works with Node.js 22+ without recompilation. Built on N-API for long-term stability.
 
 ## Getting Started
 
@@ -559,7 +559,7 @@ devices.start();
 ```
 
 ### Key Improvements in v2.x/v3.x
-- Works on Node.js 18+ without recompilation (v3.x requires Node.js 18+)
+- Works on Node.js 18+ without recompilation (v3.x requires Node.js 18+; v4.x, 22+)
 - Native N-API bindings (no more NAN compatibility issues)
 - Simpler flat event model
 - Full TypeScript definitions
